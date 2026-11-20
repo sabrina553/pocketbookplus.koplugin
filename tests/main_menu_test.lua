@@ -32,9 +32,11 @@ for _i, name in ipairs({ "ui/widget/confirmbox", "docsettings", "ui/event", "uti
     stub(name, {})
 end
 stub("ui/widget/inputdialog", { new = function(_, t) t.onShowKeyboard = function() end; t.getInputText = function() return "" end; return t end })
+stub("ui/widget/confirmbox", { new = function(_, t) return t end })
 stub("ui/widget/infomessage", { new = function(_, t) return t end })
 stub("ffi/util", { template = function(s) return s end, copyFile = function() return "stubbed" end })
-stub("datastorage", { getDataDir = function() return "/nonexistent" end })
+stub("datastorage", { getDataDir = function() return "/nonexistent" end, getSettingsDir = function() return "/nonexistent" end })
+stub("luasettings", { open = function() return { readSetting = function() return { { time = 0, items = { { id = 1, old = {} } } } } end, saveSetting = function() end, flush = function() end } end })
 stub("pocketbookplus/sync/librarydb", { new = function() return { disabled = function() return false end, shelves = function() return { { id = 1, name = "To read" } } end, open = function() return nil end } end, POSITION_PREFIX = "" })
 -- Menu taps must never touch the real filesystem or run firmware tools.
 local shell_calls = 0
