@@ -269,6 +269,35 @@ local function restoreFile(path)
     end
 end
 
+-- Width and height from a BMP header (BITMAPINFOHEADER), or nil.
+local function bmpSize(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local head = f:read(26)
+    f:close()
+    if not head or #head < 26 or head:sub(1, 2) ~= "BM" then return nil end
+    local function le32(i)
+        local a, b, c, d = head:byte(i, i + 3)
+        local v = a + b * 256 + c * 65536 + d * 16777216
+        if v >= 2147483648 then v = v - 4294967296 end
+        return v
+    end
+    return le32(19), math.abs(le32(23)) -- height is negative for top-down rows
+end
+
+local function copyFile(src, dst)
+    local tmp = dst .. ".tmp"
+    if ffiutil.copyFile(src, tmp) then -- returns an error message on failure
+        os.remove(tmp)
+        return false
+    end
+    if not os.rename(tmp, dst) then
+        os.remove(tmp)
+        return false
+    end
+    return true
+end
+
 local function panelSize()
     local S = Device.screen
     local w, h = S:getScreenWidth(), S:getScreenHeight()
@@ -301,6 +330,20 @@ local function writeLockImages(reason)
         if not path then
             logger.info("PocketBookPlus lockscreen: no images in", CUSTOM_DIR)
             return false
+        end
+        -- A BMP already at panel size goes across byte for byte: the
+        -- firmware's own images rely on their exact colours, which a
+        -- greyscale redraw would flatten.
+        local bw, bh = bmpSize(path)
+        if bw == w and bh == h then
+            util.makePath(LINE_DIR)
+            backupOnce(LOCK_PORTRAIT)
+            backupOnce(LOCK_LANDSCAPE)
+            local ok = copyFile(path, LOCK_PORTRAIT)
+                and writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE)
+            logger.info("PocketBookPlus lockscreen: custom image copied (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
+            if ok then requestReload(reason) end
+            return ok
         end
         portrait, landscape = composeCustom(w, h, path), composeCustom(h, w, path)
     end
