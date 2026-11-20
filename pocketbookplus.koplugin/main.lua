@@ -14,7 +14,9 @@ local Registry = require("pocketbookplus/registry")
 local Settings = require("pocketbookplus/settings")
 
 -- Order here is menu order.
-local MODULES = {}
+local MODULES = {
+    "pocketbookplus/modules/fixes",
+}
 
 local PocketBookPlus = WidgetContainer:extend {
     name = "pocketbookplus",
@@ -27,7 +29,7 @@ end
 
 function PocketBookPlus:init()
     self.registry = Registry.new(Settings.new())
-    for _, path in ipairs(MODULES) do
+    for _i, path in ipairs(MODULES) do
         self.registry:add(require(path))
     end
     self.registry:dispatch("init", self, logError)
@@ -36,13 +38,18 @@ end
 
 function PocketBookPlus:addToMainMenu(menu_items)
     local items = {}
-    for _, mod in ipairs(self.registry.modules) do
+    for _i, mod in ipairs(self.registry.modules) do
         local sub = {
             {
                 text = _("Enabled"),
                 checked_func = function() return self.registry:isEnabled(mod) end,
                 callback = function()
-                    self.registry:setEnabled(mod, not self.registry:isEnabled(mod))
+                    local on = not self.registry:isEnabled(mod)
+                    self.registry:setEnabled(mod, on)
+                    if mod.onToggle then
+                        local ok, err = pcall(mod.onToggle, self, on)
+                        if not ok then logError(mod.id, "onToggle", err) end
+                    end
                 end,
                 separator = true,
             },
@@ -50,7 +57,7 @@ function PocketBookPlus:addToMainMenu(menu_items)
         if mod.menuItems then
             local ok, extra = pcall(mod.menuItems, self)
             if ok then
-                for _, it in ipairs(extra) do table.insert(sub, it) end
+                for _i, it in ipairs(extra) do table.insert(sub, it) end
             else
                 logError(mod.id, "menuItems", extra)
             end
@@ -68,7 +75,7 @@ function PocketBookPlus:addToMainMenu(menu_items)
 end
 
 -- KOReader events forwarded to modules.
-for _, ev in ipairs({ "onSuspend", "onResume", "onPageUpdate", "onReaderReady", "onCloseDocument" }) do
+for _i, ev in ipairs({ "onSuspend", "onResume", "onPageUpdate", "onReaderReady", "onCloseDocument" }) do
     PocketBookPlus[ev] = function(self, ...)
         self.registry:dispatch(ev, self, logError, ...)
     end
