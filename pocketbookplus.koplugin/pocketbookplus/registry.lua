@@ -6,6 +6,7 @@
 --   default_enabled    whether it is on for a fresh install
 --   init(ctx)          optional, called once when the plugin loads
 --   menuItems(ctx)     optional, returns sub-items for its submenu
+--   onToggle(ctx, on)  optional, called when the user flips its Enabled toggle
 --   on<Event>(ctx,...) optional KOReader event handlers (onSuspend, onPageUpdate…)
 --
 -- Kept free of KOReader requires so it can be tested with plain luajit.
