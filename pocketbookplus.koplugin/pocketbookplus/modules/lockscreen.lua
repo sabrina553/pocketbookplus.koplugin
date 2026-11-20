@@ -57,6 +57,10 @@ local BOOT_TOOL = "/ebrmain/bin/iv2sh"
 
 -- Modes for the standby screen.
 local MODE_COVER, MODE_CUSTOM_FIXED, MODE_CUSTOM_RANDOM = "cover", "custom_fixed", "custom_random"
+local MODE_STATS = "stats"
+-- Statistics change slowly and the dashboard is costlier to draw (database
+-- reads, cover thumbnails), so it is redrawn at most this often while reading.
+local STATS_MIN_INTERVAL_S = 300
 
 -- Shared by the reader's and file manager's instances (the process keeps it).
 local State = {
@@ -221,6 +225,35 @@ local function composeCover(w, h, with_progress)
     return bb
 end
 
+local function composeStats(w, h, ctx)
+    local ok, bb = pcall(function()
+        local DataStorage = require("datastorage")
+        local ChartStats = require("pocketbookplus/stats/chartstats")
+        local ChartCovers = require("pocketbookplus/stats/chartcovers")
+        local ChartRender = require("pocketbookplus/stats/chartrender")
+        local signature = setting("stats_signature", "")
+        -- Without a heading there is room for two more recent books.
+        local data = ChartStats.collect(DataStorage:getSettingsDir() .. "/statistics.sqlite3",
+            { recent_count = signature ~= "" and 4 or 6 })
+        if data then
+            local cur_w, thumb_w = math.floor(w * 0.18), math.floor(w * 0.07)
+            ChartCovers.attach(data, {
+                document = ctx and ctx.ui and ctx.ui.document or nil,
+                current_box = { w = cur_w, h = math.floor(cur_w * 1.5) },
+                thumb_box = { w = thumb_w, h = math.floor(thumb_w * 1.5) },
+            })
+        end
+        local out = ChartRender.build(data, w, h, { signature = signature ~= "" and signature or nil, footer = false })
+        ChartCovers.release(data)
+        return out
+    end)
+    if not ok then
+        logger.warn("PocketBookPlus lockscreen: stats render failed:", bb)
+        return nil
+    end
+    return bb
+end
+
 local function composeCustom(w, h, path)
     local img = RenderImage:renderImageFile(path, false)
     if not img then
@@ -347,10 +380,14 @@ local function requestReload(reason)
     logger.info("PocketBookPlus lockscreen: asked taskmgr to reload (" .. tostring(reason) .. ")")
 end
 
-local function writeLockImages(reason)
+local function writeLockImages(reason, ctx)
     local w, h = panelSize()
     local portrait, landscape
-    if mode() == MODE_COVER then
+    if mode() == MODE_STATS then
+        portrait, landscape = composeStats(w, h, ctx), composeStats(h, w, ctx)
+        State.stats_written_at = os.time()
+        if not portrait then return false end
+    elseif mode() == MODE_COVER then
         portrait, landscape = composeCover(w, h, progressBar()), composeCover(h, w, progressBar())
         State.written_percent = State.percent and math.floor(State.percent * 100)
     else
@@ -520,7 +557,12 @@ end
 function LockScreen.onReaderReady(ctx)
     settings = ctx.registry.settings
     loadBook(ctx)
-    writeLockImages("open")
+    if mode() == MODE_STATS then
+        -- Drawn a moment later so opening the book stays quick.
+        UIManager:scheduleIn(5, function() writeLockImages("open", ctx) end)
+    else
+        writeLockImages("open")
+    end
     if mode() == MODE_COVER then writePowerOff("open") end
 end
 
@@ -535,7 +577,19 @@ local function writeProgressIfChanged(reason)
     end
 end
 
+local function writeStatsIfDue(ctx, reason)
+    if os.time() - (State.stats_written_at or 0) >= STATS_MIN_INTERVAL_S then
+        writeLockImages(reason or "stats", ctx)
+    end
+end
+
 function LockScreen.onPageUpdate(ctx)
+    if mode() == MODE_STATS and inReader(ctx) then
+        if State.stats_job then UIManager:unschedule(State.stats_job) end
+        State.stats_job = function() writeStatsIfDue(ctx) end
+        UIManager:scheduleIn(DEBOUNCE_S, State.stats_job)
+        return
+    end
     if mode() ~= MODE_COVER or not progressBar() or not inReader(ctx) then return end
     State.percent = currentPercent(ctx)
     UIManager:unschedule(writeProgressIfChanged)
@@ -544,6 +598,13 @@ end
 
 function LockScreen.onCloseDocument(ctx)
     UIManager:unschedule(writeProgressIfChanged)
+    if State.stats_job then UIManager:unschedule(State.stats_job) end
+    if mode() == MODE_STATS then
+        -- The statistics plugin saves the session while handling this same
+        -- event, so draw once it is done.
+        UIManager:nextTick(function() writeLockImages("close", ctx) end)
+        return
+    end
     if mode() == MODE_COVER and progressBar() and inReader(ctx) then
         State.percent = currentPercent(ctx)
         writeProgressIfChanged()
@@ -592,7 +653,7 @@ end
 local function refresh(ctx, reason)
     if inReader(ctx) then loadBook(ctx) end
     if mode() == MODE_COVER and not State.cover and not State.title then return false end
-    return writeLockImages(reason)
+    return writeLockImages(reason, ctx)
 end
 
 -- DeviceListener saves the new night_mode setting while handling the same
@@ -637,10 +698,37 @@ function LockScreen.menuItems(ctx)
     end
     return {
         modeItem(MODE_COVER, _("Book cover")),
+        modeItem(MODE_STATS, _("Reading stats"),
+            _("A dashboard from KOReader's reading statistics: the current book with its progress, recent books, day streak and reading time. Redrawn when a book opens or closes, and at most every five minutes while reading.")),
         modeItem(MODE_CUSTOM_FIXED, _("My image"),
             T(_("Shows the image chosen below. Put BMP, PNG or JPG files in %1 (the lockscreens folder at the top of the device's storage over USB)."), CUSTOM_DIR)),
         modeItem(MODE_CUSTOM_RANDOM, _("Random image each wake"),
             T(_("Picks a different image from %1 after every wake, so the next standby shows a new one."), CUSTOM_DIR)),
+        {
+            text = _("Stats heading text"),
+            help_text = _("Optional text at the top of the reading-stats screen (ASCII art works). Empty shows two more recent books instead."),
+            enabled_func = function() return mode() == MODE_STATS end,
+            keep_menu_open = true,
+            callback = function()
+                local InputDialog = require("ui/widget/inputdialog")
+                local dialog
+                dialog = InputDialog:new{
+                    title = _("Stats heading text"),
+                    input = setting("stats_signature", ""),
+                    allow_newline = true,
+                    buttons = { {
+                        { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
+                        { text = _("Save"), is_enter_default = true, callback = function()
+                            save("stats_signature", dialog:getInputText())
+                            UIManager:close(dialog)
+                            refresh(ctx, "setting")
+                        end },
+                    } },
+                }
+                UIManager:show(dialog)
+                dialog:onShowKeyboard()
+            end,
+        },
         {
             text = _("Choose image"),
             enabled_func = function() return mode() == MODE_CUSTOM_FIXED end,
