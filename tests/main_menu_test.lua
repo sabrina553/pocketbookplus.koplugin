@@ -16,19 +16,28 @@ local Device = {
 stub("device", Device)
 stub("logger", { info = function() end, warn = function() end, dbg = function() end })
 stub("ffi/framebuffer", { DEVICE_ROTATED_UPRIGHT = 0, DEVICE_ROTATED_CLOCKWISE = 1, DEVICE_ROTATED_UPSIDE_DOWN = 2, DEVICE_ROTATED_COUNTER_CLOCKWISE = 3 })
-Device.screen = { native_rotation_mode = 0 }
+Device.screen = { native_rotation_mode = 0,
+    getScreenWidth = function() return 1072 end, getScreenHeight = function() return 1448 end }
+stub("libs/libkoreader-lfs", { attributes = function() return nil end })
 stub("gettext", function(s) return s end)
-stub("ui/uimanager", { show = function() end, nextTick = function() end, scheduleIn = function() end, unschedule = function() end })
+stub("ui/uimanager", { show = function() end, unschedule = function() end, nextTick = function() end, scheduleIn = function() end })
 stub("ui/widget/container/widgetcontainer", { extend = function(_, t) return t end })
 stub("pocketbookplus/settings", { new = function()
     return { read = function(_, k) return store[k] end, save = function(_, k, v) store[k] = v end }
 end })
-for _i, name in ipairs({ "ui/widget/confirmbox", "docsettings", "ui/event", "util" }) do
+for _i, name in ipairs({ "ui/widget/confirmbox", "docsettings", "ui/event", "util",
+        "ffi/blitbuffer", "apps/filemanager/filemanagerbookinfo", "ui/font", "ui/renderimage",
+        "ui/widget/textboxwidget" }) do
     stub(name, {})
 end
 stub("ui/widget/infomessage", { new = function(_, t) return t end })
 stub("ffi/util", { template = function(s) return s end })
 stub("pocketbookplus/sync/librarydb", { new = function() return { disabled = function() return false end } end, POSITION_PREFIX = "" })
+-- Menu taps must never touch the real filesystem or run firmware tools.
+local shell_calls = 0
+os.execute = function() shell_calls = shell_calls + 1 return 0 end
+os.remove = function() return true end
+os.rename = function() error("test must not rename files") end
 G_reader_settings = { isTrue = function() return false end }
 
 local Plugin = require("main")
