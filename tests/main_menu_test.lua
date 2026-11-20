@@ -33,6 +33,10 @@ for _i, name in ipairs({ "ui/widget/confirmbox", "docsettings", "ui/event", "uti
 end
 stub("ui/widget/inputdialog", { new = function(_, t) t.onShowKeyboard = function() end; t.getInputText = function() return "" end; return t end })
 stub("ui/widget/confirmbox", { new = function(_, t) return t end })
+-- The theme patches KOReader's widget classes; only its switch is tested here.
+local theme_on = false
+stub("pocketbookplus/appearance/theme", { init = function() end,
+    enable = function() theme_on = true end, disable = function() theme_on = false end })
 stub("ui/widget/infomessage", { new = function(_, t) return t end })
 stub("ffi/util", { template = function(s) return s end, copyFile = function() return "stubbed" end })
 stub("datastorage", { getDataDir = function() return "/nonexistent" end, getSettingsDir = function() return "/nonexistent" end })
@@ -70,4 +74,5 @@ end
 walk(top.sub_item_table)
 
 assert(Device.input.event_map[1] == "Back", "Home is remapped to Back by default")
+assert(theme_on == false, "appearance is off after toggling on and off again")
 print("main_menu_test: ok")

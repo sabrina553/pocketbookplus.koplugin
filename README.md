@@ -43,6 +43,7 @@ Built on code and ideas from these AGPL-3.0 / GPL-3.0 plugins:
   rendered as a PocketBook icon. `icons/koreader/` is KOReader's own logo (AGPL-3.0).
 - Library metadata fixing follows [PbDbFixer](https://git.rustysoft.de/martin/PbDbFixer)
   by Martin Brodbeck (MIT).
+- PocketBook-style dialogs are adapted from pocketbooktools' theme by reuerendo (GPL-3.0).
 - Quick setup follows
   [PocketBook Desktop and App Customizations](https://github.com/jjrrw174/PocketBook-Desktop-and-App-Customizations)
   by jjrrw174 and the MobileRead thread it summarises.
