@@ -38,6 +38,13 @@ Built on code and ideas from these AGPL-3.0 / GPL-3.0 plugins:
 - [chartingsleepscreen](https://github.com/tadeasf/chartingsleepscreen_koplugin) by tadeasf
 - [pocketbooktools](https://github.com/reuerendo/pocketbooktools.koplugin) by reuerendo
 
+- The line icon in `icons/line/` is the KOReader icon from
+  [Arcticons](https://github.com/Donnnno/Arcticons) by Donnnno (GPL-3.0),
+  rendered as a PocketBook icon. `icons/koreader/` is KOReader's own logo (AGPL-3.0).
+- Quick setup follows
+  [PocketBook Desktop and App Customizations](https://github.com/jjrrw174/PocketBook-Desktop-and-App-Customizations)
+  by jjrrw174 and the MobileRead thread it summarises.
+
 pocketbookcover and pocketbooksync (ckilb) inspired the idea; no code is taken
 from them as they carry no licence.
 

@@ -18,6 +18,7 @@ local MODULES = {
     "pocketbookplus/modules/lockscreen",
     "pocketbookplus/modules/sync",
     "pocketbookplus/modules/fixes",
+    "pocketbookplus/modules/setup",
 }
 
 local PocketBookPlus = WidgetContainer:extend {
