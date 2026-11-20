@@ -4,12 +4,13 @@ One KOReader plugin for PocketBook that brings together several community
 plugins: lock-screen covers, library progress sync, boot last-page and
 hardware fixes, each behind its own toggle under **Tools → PocketBook Plus**.
 
-**Status:** early development. Only the menu skeleton exists so far.
+**Status:** early development.
 
 ## Planned modules
 - **Lock screen:** cover, cover + progress, reading stats, or your own images
-  from `pocketbookplus.koplugin/lockscreens/` (fixed or random). Drawn from the
-  book file, so KOReader's night mode no longer inverts it.
+  from a `lockscreens` folder at the top of the device's storage (fixed, or a
+  new one after each wake). Drawn from the book file, so KOReader's night mode
+  no longer inverts it.
 - **Sync:** library progress and two-way position with PBReader.
 - **Boot:** show the last page on start-up.
 - **Fixes:** Home as Back, page-turn keys follow rotation, upside-down start.
