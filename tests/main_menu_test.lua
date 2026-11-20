@@ -31,6 +31,7 @@ for _i, name in ipairs({ "ui/widget/confirmbox", "docsettings", "ui/event", "uti
         "ui/widget/textboxwidget" }) do
     stub(name, {})
 end
+stub("ui/widget/inputdialog", { new = function(_, t) t.onShowKeyboard = function() end; t.getInputText = function() return "" end; return t end })
 stub("ui/widget/infomessage", { new = function(_, t) return t end })
 stub("ffi/util", { template = function(s) return s end, copyFile = function() return "stubbed" end })
 stub("datastorage", { getDataDir = function() return "/nonexistent" end })
