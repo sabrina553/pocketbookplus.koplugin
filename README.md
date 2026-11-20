@@ -18,6 +18,14 @@ hardware fixes, each behind its own toggle under **Tools → PocketBook Plus**.
 
 Do not run it alongside the plugins it replaces: they write the same files.
 
+## Writes and wear
+Lock-screen images are ~9 MB per update (portrait and landscape). They are
+written at most once per whole percent read (after page turns pause), once
+per wake in random-image mode, and when night mode is switched with "Keep
+normal colours" on. That is far inside the internal storage's rated
+lifetime. The firmware is never asked to reload the image while the device
+is going to sleep, which can leave some models half asleep.
+
 ## Install
 Copy `pocketbookplus.koplugin/` to `applications/koreader/plugins/` on the device.
 
@@ -29,6 +37,13 @@ Built on code and ideas from these AGPL-3.0 / GPL-3.0 plugins:
 - [coverprogresspocketbook](https://github.com/apastuszak/coverprogresspocketbook.koplugin) by apastuszak
 - [chartingsleepscreen](https://github.com/tadeasf/chartingsleepscreen_koplugin) by tadeasf
 - [pocketbooktools](https://github.com/reuerendo/pocketbooktools.koplugin) by reuerendo
+
+- The line icon in `icons/line/` is the KOReader icon from
+  [Arcticons](https://github.com/Donnnno/Arcticons) by Donnnno (GPL-3.0),
+  rendered as a PocketBook icon. `icons/koreader/` is KOReader's own logo (AGPL-3.0).
+- Quick setup follows
+  [PocketBook Desktop and App Customizations](https://github.com/jjrrw174/PocketBook-Desktop-and-App-Customizations)
+  by jjrrw174 and the MobileRead thread it summarises.
 
 pocketbookcover and pocketbooksync (ckilb) inspired the idea; no code is taken
 from them as they carry no licence.

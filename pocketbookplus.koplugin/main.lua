@@ -18,6 +18,7 @@ local MODULES = {
     "pocketbookplus/modules/lockscreen",
     "pocketbookplus/modules/sync",
     "pocketbookplus/modules/fixes",
+    "pocketbookplus/modules/setup",
 }
 
 local PocketBookPlus = WidgetContainer:extend {
@@ -77,7 +78,8 @@ function PocketBookPlus:addToMainMenu(menu_items)
 end
 
 -- KOReader events forwarded to modules.
-for _i, ev in ipairs({ "onSuspend", "onResume", "onPageUpdate", "onReaderReady", "onCloseDocument", "onSaveSettings", "onPowerOff", "onReboot" }) do
+for _i, ev in ipairs({ "onSuspend", "onResume", "onPageUpdate", "onReaderReady", "onCloseDocument", "onSaveSettings", "onPowerOff", "onReboot",
+        "onToggleNightMode", "onSetNightMode" }) do
     PocketBookPlus[ev] = function(self, ...)
         self.registry:dispatch(ev, self, logError, ...)
     end

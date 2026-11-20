@@ -36,6 +36,7 @@ local logger = require("logger")
 local util = require("util")
 local _ = require("gettext")
 local T = ffiutil.template
+local PBConfig = require("pocketbookplus/pbconfig")
 
 local LINE_DIR = "/mnt/ext1/system/resources/Line"
 local LOCK_PORTRAIT = LINE_DIR .. "/taskmgr_lock_background.bmp"
@@ -80,6 +81,13 @@ local function progressBar() return setting("progress_bar", true) end
 local function powerOff() return setting("poweroff", true) end
 local function bootLogo() return setting("bootlogo", false) end
 local function fillScreen() return setting("fill", true) end
+local function nightNormal() return setting("night_normal", false) end
+
+-- The lock screen comes up inverted while KOReader is in night mode. With
+-- "Keep normal colours" the image is stored pre-inverted so the two cancel.
+local function invertForNight()
+    return nightNormal() and G_reader_settings:isTrue("night_mode")
+end
 
 -------------------------------------------------------------------------------
 -- Custom images
@@ -239,9 +247,10 @@ local function orientForPanel(bb)
     return bb
 end
 
-local function writeImage(bb, path, orient)
+local function writeImage(bb, path, orient, invert)
     if not bb then return false end
     if orient then bb = orientForPanel(bb) end
+    if invert then bb:invertRect(0, 0, bb:getWidth(), bb:getHeight()) end
     -- Written aside and renamed, so the firmware never reads a half-written file.
     local tmp = path .. ".tmp"
     local ok = bb:writeToFile(tmp, "bmp", 100, true)
@@ -267,6 +276,54 @@ local function restoreFile(path)
     else
         os.remove(path)
     end
+end
+
+-- Width and height from a BMP header (BITMAPINFOHEADER), or nil.
+local function bmpSize(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local head = f:read(26)
+    f:close()
+    if not head or #head < 26 or head:sub(1, 2) ~= "BM" then return nil end
+    local function le32(i)
+        local a, b, c, d = head:byte(i, i + 3)
+        local v = a + b * 256 + c * 65536 + d * 16777216
+        if v >= 2147483648 then v = v - 4294967296 end
+        return v
+    end
+    return le32(19), math.abs(le32(23)) -- height is negative for top-down rows
+end
+
+-- Copies a BMP, optionally inverting every pixel byte. Works for 24- and
+-- 32-bit files without decoding: each byte is one colour channel, and
+-- inverting the row padding too is harmless.
+local function copyFile(src, dst, invert)
+    local tmp = dst .. ".tmp"
+    if invert then
+        local f = io.open(src, "rb")
+        if not f then return false end
+        local data = f:read("*a")
+        f:close()
+        local a, b, c, d = data:byte(11, 14)
+        local offset = a + b * 256 + c * 65536 + d * 16777216
+        local bpp = data:byte(29) + data:byte(30) * 256
+        if bpp < 24 then return false end -- palette images would need the palette inverted instead
+        local buf = ffi.new("uint8_t[?]", #data)
+        ffi.copy(buf, data, #data)
+        for i = offset, #data - 1 do buf[i] = 255 - buf[i] end
+        local out = io.open(tmp, "wb")
+        if not out then return false end
+        out:write(ffi.string(buf, #data))
+        out:close()
+    elseif ffiutil.copyFile(src, tmp) then -- returns an error message on failure
+        os.remove(tmp)
+        return false
+    end
+    if not os.rename(tmp, dst) then
+        os.remove(tmp)
+        return false
+    end
+    return true
 end
 
 local function panelSize()
@@ -302,12 +359,27 @@ local function writeLockImages(reason)
             logger.info("PocketBookPlus lockscreen: no images in", CUSTOM_DIR)
             return false
         end
+        -- A BMP already at panel size goes across byte for byte: the
+        -- firmware's own images rely on their exact colours, which a
+        -- greyscale redraw would flatten.
+        local bw, bh = bmpSize(path)
+        if bw == w and bh == h then
+            util.makePath(LINE_DIR)
+            backupOnce(LOCK_PORTRAIT)
+            backupOnce(LOCK_LANDSCAPE)
+            local ok = copyFile(path, LOCK_PORTRAIT, invertForNight())
+                and writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE, false, invertForNight())
+            logger.info("PocketBookPlus lockscreen: custom image copied (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
+            if ok then requestReload(reason) end
+            return ok
+        end
         portrait, landscape = composeCustom(w, h, path), composeCustom(h, w, path)
     end
     util.makePath(LINE_DIR)
     backupOnce(LOCK_PORTRAIT)
     backupOnce(LOCK_LANDSCAPE)
-    local ok = writeImage(portrait, LOCK_PORTRAIT) and writeImage(landscape, LOCK_LANDSCAPE)
+    local invert = invertForNight()
+    local ok = writeImage(portrait, LOCK_PORTRAIT, false, invert) and writeImage(landscape, LOCK_LANDSCAPE, false, invert)
     logger.info("PocketBookPlus lockscreen: lock images written (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
     if ok then requestReload(reason) end
     return ok
@@ -381,6 +453,34 @@ end
 -------------------------------------------------------------------------------
 -- The current book
 -------------------------------------------------------------------------------
+
+-- The firmware only shows our boot and power-off images when its own logo
+-- options are set to "Book cover" (@cover_logo in global.cfg). Switching a
+-- toggle on sets that and remembers the previous value; off puts it back.
+local COVER_LOGO = "@cover_logo"
+
+local function setFirmwareLogo(key, on)
+    local saved_key = "firmware_" .. key
+    if on then
+        local current = PBConfig.get(key)
+        if current == COVER_LOGO then return end
+        if current then save(saved_key, current) end
+        local ok, err = PBConfig.set(key, COVER_LOGO)
+        logger.info("PocketBookPlus lockscreen: firmware", key, "->", COVER_LOGO, ok and "ok" or err)
+        if not ok then
+            UIManager:show(InfoMessage:new{
+                text = T(_("Could not change the PocketBook setting (%1). Set it to Book cover under Settings → Personalise → Logos."), err),
+            })
+        end
+    else
+        local previous = setting(saved_key, nil)
+        if previous and PBConfig.get(key) == COVER_LOGO then
+            local ok, err = PBConfig.set(key, previous)
+            logger.info("PocketBookPlus lockscreen: firmware", key, "restored to", previous, ok and "ok" or err)
+        end
+        save(saved_key, nil)
+    end
+end
 
 local function inReader(ctx) return ctx.ui and ctx.ui.document ~= nil end
 
@@ -495,6 +595,14 @@ local function refresh(ctx, reason)
     return writeLockImages(reason)
 end
 
+-- DeviceListener saves the new night_mode setting while handling the same
+-- event, so read it on the next tick.
+function LockScreen.onToggleNightMode(ctx)
+    if not nightNormal() then return end
+    UIManager:nextTick(function() refresh(ctx, "night mode") end)
+end
+LockScreen.onSetNightMode = LockScreen.onToggleNightMode
+
 function LockScreen.menuItems(ctx)
     settings = ctx.registry.settings
     local function modeItem(m, text, help)
@@ -559,20 +667,31 @@ function LockScreen.menuItems(ctx)
             end,
         },
         {
+            text = _("Keep normal colours in night mode"),
+            help_text = _("The lock screen is shown inverted while KOReader is in night mode. With this on, the image is stored pre-inverted so it appears in its normal colours. Rewritten whenever night mode is switched."),
+            checked_func = nightNormal,
+            callback = function()
+                save("night_normal", not nightNormal())
+                refresh(ctx, "setting")
+            end,
+        },
+        {
             text = _("Cover as the power-off image"),
-            help_text = _([[Writes the cover to system/logo/bookcover, shown when the device is off if "Power-off logo" is set to the book cover in the PocketBook settings (Personalize → Logos).]]),
+            help_text = _([[Writes the cover to system/logo/bookcover and sets the PocketBook's "Power-off logo" to Book cover. Turning it off puts the previous logo setting back.]]),
             checked_func = powerOff,
             callback = function()
                 save("poweroff", not powerOff())
+                setFirmwareLogo("offlogo", powerOff())
                 if powerOff() and inReader(ctx) then loadBook(ctx) writePowerOff("setting") end
             end,
         },
         {
             text = _("Boot screen: the last page read"),
-            help_text = _([[At each standby, a capture of the page is stored as the boot screen, shown if "Boot logo" is set to the book cover in the PocketBook settings. The firmware's tool takes a few seconds, during which the device is kept awake. Nothing is written when the page has not changed.]]),
+            help_text = _([[At each standby, a capture of the page is stored as the boot screen, and the PocketBook's "Boot logo" is set to Book cover so it is shown. Turning it off puts the previous logo setting back. The firmware's tool takes a few seconds, during which the device is kept awake. Nothing is written when the page has not changed.]]),
             checked_func = bootLogo,
             callback = function()
                 save("bootlogo", not bootLogo())
+                setFirmwareLogo("bootlogo", bootLogo())
                 State.boot_hash = nil
             end,
             separator = true,
