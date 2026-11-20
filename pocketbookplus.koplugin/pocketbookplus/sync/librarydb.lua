@@ -251,4 +251,45 @@ function LibraryDB:writePosition(book_id, profile_id, position, position_ts)
     return true
 end
 
+--- The library's collections (bookshelfs), not deleted, sorted by name.
+--- @return table list of { id=, name= }
+function LibraryDB:shelves()
+    local conn = self:open()
+    if not conn then return {} end
+    local list = {}
+    local ok, err = pcall(function()
+        local stmt = conn:prepare("SELECT id, name FROM bookshelfs WHERE is_deleted IS NOT 1 ORDER BY name")
+        local row = stmt:step()
+        while row do
+            table.insert(list, { id = num(row[1]), name = row[2] })
+            row = stmt:step()
+        end
+        stmt:close()
+    end)
+    if not ok then self:_fail("shelves", err) end
+    return list
+end
+
+--- Takes a book out of a collection. A no-op when it is not in it.
+--- The row is deleted outright, as pocketbooktools does (proven on the
+--- device). bookshelfs_books also has is_deleted/ts columns, likely for
+--- PocketBook Cloud sync; a synced device may bring a deleted row back.
+--- @return boolean success
+function LibraryDB:removeFromShelf(book_id, shelf_id)
+    local conn = self:open()
+    if not conn then return false end
+    local ffi = require("ffi")
+    local ok, err = pcall(function()
+        local stmt = conn:prepare("DELETE FROM bookshelfs_books WHERE bookid = ? AND bookshelfid = ?")
+        stmt:reset():bind(ffi.new("int64_t", book_id), ffi.new("int64_t", shelf_id)):step()
+        stmt:close()
+    end)
+    if not ok then
+        self:_fail("shelf removal", err)
+        return false
+    end
+    self.errors = 0
+    return true
+end
+
 return LibraryDB
