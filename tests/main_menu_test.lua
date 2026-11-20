@@ -18,11 +18,17 @@ stub("logger", { info = function() end, warn = function() end, dbg = function() 
 stub("ffi/framebuffer", { DEVICE_ROTATED_UPRIGHT = 0, DEVICE_ROTATED_CLOCKWISE = 1, DEVICE_ROTATED_UPSIDE_DOWN = 2, DEVICE_ROTATED_COUNTER_CLOCKWISE = 3 })
 Device.screen = { native_rotation_mode = 0 }
 stub("gettext", function(s) return s end)
-stub("ui/uimanager", { nextTick = function() end, scheduleIn = function() end, unschedule = function() end })
+stub("ui/uimanager", { show = function() end, nextTick = function() end, scheduleIn = function() end, unschedule = function() end })
 stub("ui/widget/container/widgetcontainer", { extend = function(_, t) return t end })
 stub("pocketbookplus/settings", { new = function()
     return { read = function(_, k) return store[k] end, save = function(_, k, v) store[k] = v end }
 end })
+for _i, name in ipairs({ "ui/widget/confirmbox", "docsettings", "ui/event", "util" }) do
+    stub(name, {})
+end
+stub("ui/widget/infomessage", { new = function(_, t) return t end })
+stub("ffi/util", { template = function(s) return s end })
+stub("pocketbookplus/sync/librarydb", { new = function() return { disabled = function() return false end } end, POSITION_PREFIX = "" })
 G_reader_settings = { isTrue = function() return false end }
 
 local Plugin = require("main")

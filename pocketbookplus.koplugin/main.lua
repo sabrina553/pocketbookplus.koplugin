@@ -15,6 +15,7 @@ local Settings = require("pocketbookplus/settings")
 
 -- Order here is menu order.
 local MODULES = {
+    "pocketbookplus/modules/sync",
     "pocketbookplus/modules/fixes",
 }
 
@@ -75,7 +76,7 @@ function PocketBookPlus:addToMainMenu(menu_items)
 end
 
 -- KOReader events forwarded to modules.
-for _i, ev in ipairs({ "onSuspend", "onResume", "onPageUpdate", "onReaderReady", "onCloseDocument" }) do
+for _i, ev in ipairs({ "onSuspend", "onResume", "onPageUpdate", "onReaderReady", "onCloseDocument", "onSaveSettings" }) do
     PocketBookPlus[ev] = function(self, ...)
         self.registry:dispatch(ev, self, logError, ...)
     end
