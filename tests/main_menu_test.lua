@@ -18,6 +18,7 @@ stub("logger", { info = function() end, warn = function() end, dbg = function() 
 stub("ffi/framebuffer", { DEVICE_ROTATED_UPRIGHT = 0, DEVICE_ROTATED_CLOCKWISE = 1, DEVICE_ROTATED_UPSIDE_DOWN = 2, DEVICE_ROTATED_COUNTER_CLOCKWISE = 3 })
 Device.screen = { native_rotation_mode = 0,
     getScreenWidth = function() return 1072 end, getScreenHeight = function() return 1448 end }
+stub("pocketbookplus/pbconfig", { get = function() return nil end, set = function() return true end })
 stub("libs/libkoreader-lfs", { attributes = function() return nil end })
 stub("gettext", function(s) return s end)
 stub("ui/uimanager", { show = function() end, unschedule = function() end, nextTick = function() end, scheduleIn = function() end })

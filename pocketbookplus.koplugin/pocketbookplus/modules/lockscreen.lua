@@ -36,6 +36,7 @@ local logger = require("logger")
 local util = require("util")
 local _ = require("gettext")
 local T = ffiutil.template
+local PBConfig = require("pocketbookplus/pbconfig")
 
 local LINE_DIR = "/mnt/ext1/system/resources/Line"
 local LOCK_PORTRAIT = LINE_DIR .. "/taskmgr_lock_background.bmp"
@@ -425,6 +426,34 @@ end
 -- The current book
 -------------------------------------------------------------------------------
 
+-- The firmware only shows our boot and power-off images when its own logo
+-- options are set to "Book cover" (@cover_logo in global.cfg). Switching a
+-- toggle on sets that and remembers the previous value; off puts it back.
+local COVER_LOGO = "@cover_logo"
+
+local function setFirmwareLogo(key, on)
+    local saved_key = "firmware_" .. key
+    if on then
+        local current = PBConfig.get(key)
+        if current == COVER_LOGO then return end
+        if current then save(saved_key, current) end
+        local ok, err = PBConfig.set(key, COVER_LOGO)
+        logger.info("PocketBookPlus lockscreen: firmware", key, "->", COVER_LOGO, ok and "ok" or err)
+        if not ok then
+            UIManager:show(InfoMessage:new{
+                text = T(_("Could not change the PocketBook setting (%1). Set it to Book cover under Settings → Personalise → Logos."), err),
+            })
+        end
+    else
+        local previous = setting(saved_key, nil)
+        if previous and PBConfig.get(key) == COVER_LOGO then
+            local ok, err = PBConfig.set(key, previous)
+            logger.info("PocketBookPlus lockscreen: firmware", key, "restored to", previous, ok and "ok" or err)
+        end
+        save(saved_key, nil)
+    end
+end
+
 local function inReader(ctx) return ctx.ui and ctx.ui.document ~= nil end
 
 local function currentPercent(ctx)
@@ -603,19 +632,21 @@ function LockScreen.menuItems(ctx)
         },
         {
             text = _("Cover as the power-off image"),
-            help_text = _([[Writes the cover to system/logo/bookcover, shown when the device is off if "Power-off logo" is set to the book cover in the PocketBook settings (Personalize → Logos).]]),
+            help_text = _([[Writes the cover to system/logo/bookcover and sets the PocketBook's "Power-off logo" to Book cover. Turning it off puts the previous logo setting back.]]),
             checked_func = powerOff,
             callback = function()
                 save("poweroff", not powerOff())
+                setFirmwareLogo("offlogo", powerOff())
                 if powerOff() and inReader(ctx) then loadBook(ctx) writePowerOff("setting") end
             end,
         },
         {
             text = _("Boot screen: the last page read"),
-            help_text = _([[At each standby, a capture of the page is stored as the boot screen, shown if "Boot logo" is set to the book cover in the PocketBook settings. The firmware's tool takes a few seconds, during which the device is kept awake. Nothing is written when the page has not changed.]]),
+            help_text = _([[At each standby, a capture of the page is stored as the boot screen, and the PocketBook's "Boot logo" is set to Book cover so it is shown. Turning it off puts the previous logo setting back. The firmware's tool takes a few seconds, during which the device is kept awake. Nothing is written when the page has not changed.]]),
             checked_func = bootLogo,
             callback = function()
                 save("bootlogo", not bootLogo())
+                setFirmwareLogo("bootlogo", bootLogo())
                 State.boot_hash = nil
             end,
             separator = true,
