@@ -18,6 +18,14 @@ hardware fixes, each behind its own toggle under **Tools → PocketBook Plus**.
 
 Do not run it alongside the plugins it replaces: they write the same files.
 
+## Writes and wear
+Lock-screen images are ~9 MB per update (portrait and landscape). They are
+written at most once per whole percent read (after page turns pause), once
+per wake in random-image mode, and when night mode is switched with "Keep
+normal colours" on. That is far inside the internal storage's rated
+lifetime. The firmware is never asked to reload the image while the device
+is going to sleep, which can leave some models half asleep.
+
 ## Install
 Copy `pocketbookplus.koplugin/` to `applications/koreader/plugins/` on the device.
 
