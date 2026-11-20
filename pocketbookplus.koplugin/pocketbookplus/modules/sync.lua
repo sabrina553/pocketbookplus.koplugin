@@ -27,6 +27,8 @@ local LibraryDB = require("pocketbookplus/sync/librarydb")
 
 local LAST_KEY = "pocketbookplus_sync_last" -- doc_settings: { ts=, position= } last written or acknowledged
 local OFFER_KEY = "sync.offer_newer"
+local HIDE_KEY = "sync.hide_finished"
+local SHELF_KEY = "sync.finished_shelf" -- { id=, name= } of the PocketBook collection
 
 local function currentProfileName()
     local ffi = require("ffi")
@@ -159,7 +161,9 @@ function State:collect()
         cpage = math.max(page - 1, 0), -- the column is 0-based
         npage = total,
         completed = completed and 1 or 0,
-        opentime = now,
+        -- The home screen lists recent books by opentime, so 0 drops a
+        -- finished book from it while keeping it in the library.
+        opentime = (completed and self.settings:read(HIDE_KEY)) and 0 or now,
         position = position,
         position_ts = position and now or nil,
         exact = exact,
@@ -188,6 +192,7 @@ function State:sync(source, force)
         return false, _("Database write failed.")
     end
     self.last = data
+    if data.completed == 1 then self:finishedHooks(book) end
     if data.position then
         self.ui.doc_settings:saveSetting(LAST_KEY, { ts = data.position_ts, position = data.position })
     end
@@ -197,6 +202,24 @@ function State:sync(source, force)
     self.status = T(_("Last write: %1."), source)
     return true, T(_("Written: page %1 of %2%3"), data.cpage + 1, data.npage,
         data.position and "" or _(", position not mapped"))
+end
+
+-- Takes a finished book out of the chosen collection, on PocketBook and in
+-- KOReader's own collection of the same name. Both are no-ops when the book
+-- is not in them, so running this on every write while finished is safe.
+function State:finishedHooks(book)
+    local shelf = self.settings:read(SHELF_KEY)
+    if not shelf then return end
+    if db:removeFromShelf(book.id, shelf.id) then
+        logger.info("PocketBookPlus sync: finished book", book.id, "taken out of collection", shelf.name)
+    end
+    local ok, ReadCollection = pcall(require, "readcollection")
+    local file = self.ui.document and self.ui.document.file
+    if ok and file and ReadCollection.coll and ReadCollection.coll[shelf.name]
+        and ReadCollection.coll[shelf.name][file] then
+        ReadCollection.coll[shelf.name][file] = nil
+        ReadCollection:saveCollections()
+    end
 end
 
 -- Our last write, else the sidecar's mtime (read in KOReader before this
@@ -336,6 +359,40 @@ function Sync.menuItems(ctx)
             help_text = _("When PBReader saved a position after this plugin's last write, ask whether to go there."),
             checked_func = function() return s:offersNewer() end,
             callback = function() s.settings:save(OFFER_KEY, not s:offersNewer()) end,
+            separator = true,
+        },
+        {
+            text = _("Hide finished books from the home screen"),
+            help_text = _("A book marked finished in KOReader no longer appears among the recent books on the PocketBook home screen. It stays in the library."),
+            checked_func = function() return s.settings:read(HIDE_KEY) == true end,
+            callback = function() s.settings:save(HIDE_KEY, s.settings:read(HIDE_KEY) ~= true) end,
+        },
+        {
+            text_func = function()
+                local shelf = s.settings:read(SHELF_KEY)
+                return T(_("Remove finished books from: %1"), shelf and shelf.name or _("none"))
+            end,
+            help_text = _("When a book is marked finished, take it out of this PocketBook collection (and KOReader's collection of the same name, if there is one). Useful for a to-read list."),
+            sub_item_table_func = function()
+                local items = { {
+                    text = _("None"),
+                    radio = true,
+                    checked_func = function() return s.settings:read(SHELF_KEY) == nil end,
+                    callback = function() s.settings:save(SHELF_KEY, nil) end,
+                } }
+                for _i, shelf in ipairs(db:shelves()) do
+                    table.insert(items, {
+                        text = shelf.name,
+                        radio = true,
+                        checked_func = function()
+                            local cur = s.settings:read(SHELF_KEY)
+                            return cur ~= nil and cur.id == shelf.id
+                        end,
+                        callback = function() s.settings:save(SHELF_KEY, { id = shelf.id, name = shelf.name }) end,
+                    })
+                end
+                return items
+            end,
             separator = true,
         },
         {

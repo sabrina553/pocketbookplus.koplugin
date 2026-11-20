@@ -35,7 +35,7 @@ stub("ui/widget/inputdialog", { new = function(_, t) t.onShowKeyboard = function
 stub("ui/widget/infomessage", { new = function(_, t) return t end })
 stub("ffi/util", { template = function(s) return s end, copyFile = function() return "stubbed" end })
 stub("datastorage", { getDataDir = function() return "/nonexistent" end })
-stub("pocketbookplus/sync/librarydb", { new = function() return { disabled = function() return false end } end, POSITION_PREFIX = "" })
+stub("pocketbookplus/sync/librarydb", { new = function() return { disabled = function() return false end, shelves = function() return { { id = 1, name = "To read" } } end } end, POSITION_PREFIX = "" })
 -- Menu taps must never touch the real filesystem or run firmware tools.
 local shell_calls = 0
 os.execute = function() shell_calls = shell_calls + 1 return 0 end
@@ -57,7 +57,8 @@ assert(top and #top.sub_item_table >= 1, "top menu built")
 -- Walk every item and flip every toggle, as a user tapping through would.
 local function walk(items)
     for _i, it in ipairs(items) do
-        assert(type(it.text) == "string", "item has text")
+        local text = it.text_func and it.text_func() or it.text
+        assert(type(text) == "string", "item has text")
         if it.checked_func then it.checked_func() end
         if it.callback then it.callback(); it.callback() end
         if it.sub_item_table then walk(it.sub_item_table) end
