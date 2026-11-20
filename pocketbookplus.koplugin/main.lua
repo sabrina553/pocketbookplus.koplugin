@@ -17,6 +17,7 @@ local Settings = require("pocketbookplus/settings")
 local MODULES = {
     "pocketbookplus/modules/lockscreen",
     "pocketbookplus/modules/sync",
+    "pocketbookplus/modules/library",
     "pocketbookplus/modules/fixes",
     "pocketbookplus/modules/setup",
 }

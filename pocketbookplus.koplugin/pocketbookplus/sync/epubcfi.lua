@@ -628,5 +628,7 @@ EpubCfi._parseXml = parseXml
 EpubCfi._parseXPointer = parseXPointer
 EpubCfi._textChunks = textChunks
 EpubCfi._joinPath = joinPath
+EpubCfi._parseXml = parseXml
+EpubCfi._attr = attr
 
 return EpubCfi
