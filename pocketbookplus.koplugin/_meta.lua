@@ -1,6 +1,5 @@
 local _ = require("gettext")
 return {
-    name = "pocketbookplus",
     fullname = _("PocketBook Plus"),
     description = _([[Lock screen, library sync and device fixes for PocketBook in one plugin.]]),
     version = "0.0.1-dev.1",
