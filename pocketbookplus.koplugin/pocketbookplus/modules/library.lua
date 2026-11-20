@@ -25,7 +25,8 @@ local db = LibraryDB.new()
 -- version 38 (PbDbFixer checks the same).
 local EPUBS_SQL = [[
     SELECT b.id, folders.name, files.filename, b.author, b.firstauthor, b.first_author_letter, b.series,
-      (SELECT g.name FROM booktogenre bg JOIN genres g ON g.id = bg.genreid WHERE bg.bookid = b.id LIMIT 1)
+      (SELECT g.name FROM booktogenre bg JOIN genres g ON g.id = bg.genreid WHERE bg.bookid = b.id LIMIT 1),
+      b.numinseries
     FROM books_impl b
       JOIN files ON b.id = files.book_id
       JOIN folders ON folders.id = files.folder_id
@@ -94,7 +95,10 @@ local function scan()
                 author = r[4], firstauthor = r[5], first_author_letter = r[6], series = r[7], genre = r[8],
             }, Metadata.fromOpf(opf))
             if next(changes) then
-                table.insert(plan, { id = tonumber(r[1]), changes = changes, path = path })
+                table.insert(plan, { id = tonumber(r[1]), changes = changes, path = path, old = {
+                    author = r[4], firstauthor = r[5], first_author_letter = r[6], series = r[7],
+                    numinseries = r[9] and tonumber(r[9]) or nil,
+                } })
                 for k in pairs(changes) do
                     if counts[k] then counts[k] = counts[k] + 1 end
                 end
@@ -163,6 +167,79 @@ local function applyPlan(plan)
     end)
 end
 
+-------------------------------------------------------------------------------
+-- Undo
+-------------------------------------------------------------------------------
+
+-- Each fix records the old values of exactly what it changed, so an undo
+-- puts back only those and leaves everything that happened since (new
+-- books, progress, collections) alone. A whole-database snapshot could not.
+local MAX_UNDO = 3
+
+local function undoStore()
+    local DataStorage = require("datastorage")
+    local LuaSettings = require("luasettings")
+    return LuaSettings:open(DataStorage:getSettingsDir() .. "/pocketbookplus_undo.lua")
+end
+
+local function undoRecords()
+    return undoStore():readSetting("metadata") or {}
+end
+
+local function recordUndo(plan)
+    local items = {}
+    for _i, item in ipairs(plan) do
+        local old = {}
+        for col in pairs(item.changes) do
+            if col ~= "genre" then old[col] = item.old[col] or false end -- false: was NULL
+        end
+        table.insert(items, { id = item.id, old = old, genre_added = item.changes.genre })
+    end
+    local store = undoStore()
+    local records = store:readSetting("metadata") or {}
+    table.insert(records, 1, { time = os.time(), items = items })
+    while #records > MAX_UNDO do table.remove(records) end
+    store:saveSetting("metadata", records)
+    store:flush()
+end
+
+local UNDO_COLUMNS = { "author", "firstauthor", "first_author_letter", "series", "numinseries" }
+
+local function revert(index)
+    local records = undoRecords()
+    local record = records[index]
+    if not record then return false, "no such fix" end
+    local ffi = require("ffi")
+    local function I(n) return ffi.new("int64_t", n) end
+    local ok, err = transaction(function(conn)
+        for _i, item in ipairs(record.items) do
+            for _j, col in ipairs(UNDO_COLUMNS) do
+                local v = item.old[col]
+                if v ~= nil then
+                    if v == false then
+                        exec(conn, "UPDATE books_impl SET " .. col .. " = NULL WHERE id = ?", I(item.id))
+                    elseif col == "numinseries" then
+                        exec(conn, "UPDATE books_impl SET numinseries = ? WHERE id = ?", I(v), I(item.id))
+                    else
+                        exec(conn, "UPDATE books_impl SET " .. col .. " = ? WHERE id = ?", v, I(item.id))
+                    end
+                end
+            end
+            if item.genre_added then
+                exec(conn, "DELETE FROM booktogenre WHERE bookid = ? AND genreid = (SELECT id FROM genres WHERE name = ?)",
+                    I(item.id), item.genre_added)
+            end
+        end
+    end)
+    if ok then
+        table.remove(records, index)
+        local store = undoStore()
+        store:saveSetting("metadata", records)
+        store:flush()
+    end
+    return ok, err
+end
+
 local function removeGhosts()
     return transaction(function(conn)
         conn:exec("DELETE FROM books_impl WHERE " .. GHOSTS_WHERE)
@@ -213,8 +290,9 @@ Unreadable EPUBs (skipped): %7]]), counts.books, counts.author, counts.firstauth
         ok_callback = function()
             local ok, err = applyPlan(plan)
             logger.info("PocketBookPlus library: fixes applied", ok and "ok" or err)
+            if ok then recordUndo(plan) end
             UIManager:show(InfoMessage:new{
-                text = ok and _("Library fixed. The PocketBook Library shows the changes when it is next opened.")
+                text = ok and T(_("Fixed %1 books. The PocketBook Library shows the changes when it is next opened.\n\nTo put them back: Library metadata → Undo a fix."), #plan)
                     or T(_("Nothing was changed: %1"), err),
             })
         end,
@@ -249,6 +327,34 @@ function Library.menuItems()
             help_text = _("Reads each EPUB's own metadata and shows how many authors, author sort names, A–Z letters, series and genres the PocketBook library has wrong or missing. Nothing is written until you confirm."),
             keep_menu_open = true,
             callback = checkAndOffer,
+        },
+        {
+            text = _("Undo a fix"),
+            help_text = T(_("Puts back the values a metadata fix changed, and nothing else. The last %1 fixes are kept."), MAX_UNDO),
+            sub_item_table_func = function()
+                local items = {}
+                for i, rec in ipairs(undoRecords()) do
+                    table.insert(items, {
+                        text = T(_("%1 (%2 books)"), os.date("%Y-%m-%d %H:%M", rec.time), #rec.items),
+                        keep_menu_open = true,
+                        callback = function(touchmenu)
+                            UIManager:show(ConfirmBox:new{
+                                text = T(_("Undo the fix of %1? The library database is backed up first."), os.date("%Y-%m-%d %H:%M", rec.time)),
+                                ok_text = _("Undo"),
+                                ok_callback = function()
+                                    local ok, err = revert(i)
+                                    logger.info("PocketBookPlus library: undo", ok and "ok" or err)
+                                    UIManager:show(InfoMessage:new{ text = ok and _("Fix undone.") or T(_("Nothing was changed: %1"), err) })
+                                    if touchmenu then touchmenu:backToUpperMenu() end
+                                end,
+                            })
+                        end,
+                    })
+                end
+                if #items == 0 then table.insert(items, { text = _("No fixes to undo"), enabled = false }) end
+                return items
+            end,
+            separator = true,
         },
         {
             text = _("Remove entries without a file…"),
