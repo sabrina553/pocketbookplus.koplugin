@@ -21,7 +21,7 @@ Device.screen = { native_rotation_mode = 0,
 stub("pocketbookplus/pbconfig", { get = function() return nil end, set = function() return true end })
 stub("libs/libkoreader-lfs", { attributes = function() return nil end, mkdir = function() return nil end, dir = function() return function() end end })
 stub("gettext", function(s) return s end)
-stub("ui/uimanager", { show = function() end, unschedule = function() end, nextTick = function() end, scheduleIn = function() end })
+stub("ui/uimanager", { show = function() end, close = function() end, forceRePaint = function() end, unschedule = function() end, nextTick = function() end, scheduleIn = function() end })
 stub("ui/widget/container/widgetcontainer", { extend = function(_, t) return t end })
 stub("pocketbookplus/settings", { new = function()
     return { read = function(_, k) return store[k] end, save = function(_, k, v) store[k] = v end }
@@ -35,7 +35,7 @@ stub("ui/widget/inputdialog", { new = function(_, t) t.onShowKeyboard = function
 stub("ui/widget/infomessage", { new = function(_, t) return t end })
 stub("ffi/util", { template = function(s) return s end, copyFile = function() return "stubbed" end })
 stub("datastorage", { getDataDir = function() return "/nonexistent" end })
-stub("pocketbookplus/sync/librarydb", { new = function() return { disabled = function() return false end, shelves = function() return { { id = 1, name = "To read" } } end } end, POSITION_PREFIX = "" })
+stub("pocketbookplus/sync/librarydb", { new = function() return { disabled = function() return false end, shelves = function() return { { id = 1, name = "To read" } } end, open = function() return nil end } end, POSITION_PREFIX = "" })
 -- Menu taps must never touch the real filesystem or run firmware tools.
 local shell_calls = 0
 os.execute = function() shell_calls = shell_calls + 1 return 0 end
