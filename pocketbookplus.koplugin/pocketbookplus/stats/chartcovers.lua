@@ -114,7 +114,9 @@ function chartcovers.attach(data, opts)
         for _, book in ipairs(data.recent or {}) do
             if book.md5 then wanted[book.md5] = true end
         end
-        local map = md5FileMap(wanted)
+        -- Kept on data: both orientations draw from the same collection.
+        data.file_map = data.file_map or md5FileMap(wanted)
+        local map = data.file_map
         if cur and cur.md5 then
             local file = map[cur.md5]
             local document

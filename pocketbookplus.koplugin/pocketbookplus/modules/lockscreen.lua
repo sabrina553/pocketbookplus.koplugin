@@ -225,16 +225,27 @@ local function composeCover(w, h, with_progress)
     return bb
 end
 
-local function composeStats(w, h, ctx)
-    local ok, bb = pcall(function()
+-- Collected once per write and drawn in both orientations.
+local function collectStats()
+    local ok, data = pcall(function()
         local DataStorage = require("datastorage")
         local ChartStats = require("pocketbookplus/stats/chartstats")
+        -- Without a heading there is room for two more recent books.
+        return ChartStats.collect(DataStorage:getSettingsDir() .. "/statistics.sqlite3",
+            { recent_count = setting("stats_signature", "") ~= "" and 4 or 6 })
+    end)
+    if not ok then
+        logger.warn("PocketBookPlus lockscreen: stats collect failed:", data)
+        return nil
+    end
+    return data
+end
+
+local function composeStats(w, h, ctx, data)
+    local ok, bb = pcall(function()
         local ChartCovers = require("pocketbookplus/stats/chartcovers")
         local ChartRender = require("pocketbookplus/stats/chartrender")
         local signature = setting("stats_signature", "")
-        -- Without a heading there is room for two more recent books.
-        local data = ChartStats.collect(DataStorage:getSettingsDir() .. "/statistics.sqlite3",
-            { recent_count = signature ~= "" and 4 or 6 })
         if data then
             local cur_w, thumb_w = math.floor(w * 0.18), math.floor(w * 0.07)
             ChartCovers.attach(data, {
@@ -384,7 +395,8 @@ local function writeLockImages(reason, ctx)
     local w, h = panelSize()
     local portrait, landscape
     if mode() == MODE_STATS then
-        portrait, landscape = composeStats(w, h, ctx), composeStats(h, w, ctx)
+        local data = collectStats()
+        portrait, landscape = composeStats(w, h, ctx, data), composeStats(h, w, ctx, data)
         State.stats_written_at = os.time()
         if not portrait then return false end
     elseif mode() == MODE_COVER then
@@ -629,6 +641,11 @@ function LockScreen.onSuspend(ctx)
     -- leaves the device half asleep.
     if UIManager:unschedule(writeProgressIfChanged) then
         writeProgressIfChanged("suspend")
+    end
+    -- Left pending it would fire on wake and stall the reader while it draws.
+    if State.stats_job and UIManager:unschedule(State.stats_job) then
+        State.stats_job = nil
+        writeStatsIfDue(ctx, "suspend")
     end
     writeBootImage("suspend")
 end
