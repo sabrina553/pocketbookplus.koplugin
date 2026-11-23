@@ -84,7 +84,17 @@ local function mode() return setting("mode", MODE_COVER) end
 local function progressBar() return setting("progress_bar", true) end
 local function powerOff() return setting("poweroff", true) end
 local function bootLogo() return setting("bootlogo", false) end
-local function fillScreen() return setting("fill", true) end
+-- "fit", "fill" or "stretch". The boolean `lockscreen.fill` is still read so
+-- settings saved before `scaling` existed keep their look.
+local SCALINGS = { fit = true, fill = true, stretch = true }
+local function scalingFrom(scaling, fill)
+    if SCALINGS[scaling] then return scaling end
+    if fill == false then return "fit" end
+    return "fill"
+end
+local function scaling()
+    return scalingFrom(settings:read("lockscreen.scaling"), settings:read("lockscreen.fill"))
+end
 local function nightNormal() return setting("night_normal", false) end
 
 -- The lock screen comes up inverted while KOReader is in night mode. With
@@ -169,8 +179,20 @@ local function blitFilled(bb, img, w, h)
     if scaled ~= img then scaled:free() end
 end
 
+-- Scales each axis independently to the screen size, ignoring the aspect
+-- ratio: nothing is cropped and there are no bands, at the cost of a slightly
+-- wider image (~12% for a 2:3 cover on a 3:4 panel).
+local function blitStretched(bb, img, w, h)
+    local scaled = RenderImage:scaleBlitBuffer(img, w, h, false)
+    bb:blitFrom(scaled, 0, 0, 0, 0, w, h)
+    if scaled ~= img then scaled:free() end
+end
+
 local function blitImage(bb, img, w, h)
-    if fillScreen() then blitFilled(bb, img, w, h) else blitCentred(bb, img, w, h) end
+    local s = scaling()
+    if s == "fill" then blitFilled(bb, img, w, h)
+    elseif s == "stretch" then blitStretched(bb, img, w, h)
+    else blitCentred(bb, img, w, h) end
 end
 
 local function paintTitle(bb, w, h)
@@ -694,6 +716,20 @@ LockScreen.onSetNightMode = LockScreen.onToggleNightMode
 
 function LockScreen.menuItems(ctx)
     settings = ctx.registry.settings
+    local function scalingItem(s, text, help)
+        return {
+            text = text,
+            help_text = help,
+            radio = true,
+            checked_func = function() return scaling() == s end,
+            callback = function()
+                save("scaling", s)
+                refresh(ctx, "setting")
+                if mode() == MODE_COVER and inReader(ctx) then writePowerOff("setting") end
+            end,
+        }
+    end
+
     local function modeItem(m, text, help)
         return {
             text = text,
@@ -764,14 +800,16 @@ function LockScreen.menuItems(ctx)
             separator = true,
         },
         {
-            text = _("Fill the screen (crop edges)"),
-            help_text = _("Scales the image until it covers the whole screen and trims what overflows, instead of fitting it with white bands at the sides. Applies to the lock and power-off screens."),
-            checked_func = fillScreen,
-            callback = function()
-                save("fill", not fillScreen())
-                refresh(ctx, "setting")
-                if mode() == MODE_COVER and inReader(ctx) then writePowerOff("setting") end
-            end,
+            text = _("Cover scaling"),
+            help_text = _("How the image is fitted to the screen when its shape differs. Applies to the lock and power-off screens."),
+            sub_item_table = {
+                scalingItem("fit", _("Fit (white bands)"),
+                    _("Keeps the whole image and its proportions, leaving white bands at the sides or top and bottom.")),
+                scalingItem("fill", _("Fill (crop edges)"),
+                    _("Scales the image until it covers the whole screen and trims what overflows.")),
+                scalingItem("stretch", _("Stretch (ignore aspect ratio)"),
+                    _("Stretches the image to the screen's exact size. Nothing is cut off, but the image is slightly distorted.")),
+            },
         },
         {
             text = _("Progress bar on the cover"),
@@ -835,5 +873,8 @@ function LockScreen.menuItems(ctx)
         },
     }
 end
+
+-- Exposed for tests.
+LockScreen._scalingFrom = scalingFrom
 
 return LockScreen
