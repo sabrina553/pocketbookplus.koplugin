@@ -50,6 +50,9 @@ os.rename = function() error("test must not rename files") end
 G_reader_settings = { isTrue = function() return false end }
 io.open = function() return nil end -- no reads or writes of real files
 
+-- The cover-pages CSS hooks this class; the stub builds no CSS of its own.
+local StyleTweak = { updateCssText = function(self) self.css_text = self.base_css end }
+stub("apps/reader/modules/readerstyletweak", StyleTweak)
 local Plugin = require("main")
 local ui = { menu = { registerToMainMenu = function() end } }
 local p = setmetatable({ ui = ui }, { __index = Plugin })
@@ -82,3 +85,13 @@ assert(scalingFrom(nil, false) == "fit", "fill = false maps to fit")
 assert(scalingFrom("stretch", false) == "stretch", "scaling overrides fill")
 assert(scalingFrom("bogus", false) == "fit", "unknown scaling falls back to the fill setting")
 print("main_menu_test: ok")
+
+-- Cover pages: the last radio tapped is Stretch, so its CSS is appended after
+-- the book's own tweaks; Off appends nothing.
+local st = setmetatable({ base_css = "p {}" }, { __index = StyleTweak })
+st:updateCssText(false)
+assert(st.css_text:find("^p {}\n") and st.css_text:find("height: 99vh"), "stretch CSS appended to the tweaks")
+store["reader.cover_pages"] = "off"
+st:updateCssText(false)
+assert(st.css_text == "p {}", "no CSS when cover pages is off")
+print("cover pages css: ok")
