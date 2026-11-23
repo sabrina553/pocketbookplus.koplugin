@@ -16,6 +16,8 @@ hardware fixes, each behind its own toggle under **Tools → PocketBook Plus**.
 - **Fixes:** Home as Back, page-turn keys follow rotation, upside-down start,
   and KOReader's night mode linked with PocketBook's dark mode (the
   PocketBook's setting wins on start and wake).
+- **Reader:** cover pages: the images in a book's first two sections (cover
+  and inside cover) fit or stretch to the page, inside the margins.
 - **Patches:** installs KOReader user patches: hide the "Opening file"
   message, keep the screen while the first book loads, hide frontlight,
   Wi-Fi and SSH pop-ups. Each takes effect after a restart.
