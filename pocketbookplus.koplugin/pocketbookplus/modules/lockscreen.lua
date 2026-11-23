@@ -93,6 +93,12 @@ local function invertForNight()
     return nightNormal() and G_reader_settings:isTrue("night_mode")
 end
 
+-- The stats screen is drawn by us, so night mode gets its own dark palette
+-- rather than a blunt inversion that would also flip the cover thumbnails.
+local function statsDark()
+    return G_reader_settings:isTrue("night_mode") and not nightNormal()
+end
+
 -------------------------------------------------------------------------------
 -- Custom images
 -------------------------------------------------------------------------------
@@ -241,7 +247,7 @@ local function collectStats()
     return data
 end
 
-local function composeStats(w, h, ctx, data)
+local function composeStats(w, h, ctx, data, dark)
     local ok, bb = pcall(function()
         local ChartCovers = require("pocketbookplus/stats/chartcovers")
         local ChartRender = require("pocketbookplus/stats/chartrender")
@@ -254,7 +260,11 @@ local function composeStats(w, h, ctx, data)
                 thumb_box = { w = thumb_w, h = math.floor(thumb_w * 1.5) },
             })
         end
-        local out = ChartRender.build(data, w, h, { signature = signature ~= "" and signature or nil, footer = false })
+        local out = ChartRender.build(data, w, h, {
+            signature = signature ~= "" and signature or nil,
+            footer = false,
+            invert = dark,
+        })
         ChartCovers.release(data)
         return out
     end)
@@ -396,7 +406,8 @@ local function writeLockImages(reason, ctx)
     local portrait, landscape
     if mode() == MODE_STATS then
         local data = collectStats()
-        portrait, landscape = composeStats(w, h, ctx, data), composeStats(h, w, ctx, data)
+        local dark = statsDark()
+        portrait, landscape = composeStats(w, h, ctx, data, dark), composeStats(h, w, ctx, data, dark)
         State.stats_written_at = os.time()
         if not portrait then return false end
     elseif mode() == MODE_COVER then
@@ -427,7 +438,7 @@ local function writeLockImages(reason, ctx)
     util.makePath(LINE_DIR)
     backupOnce(LOCK_PORTRAIT)
     backupOnce(LOCK_LANDSCAPE)
-    local invert = invertForNight()
+    local invert = mode() ~= MODE_STATS and invertForNight()
     local ok = writeImage(portrait, LOCK_PORTRAIT, false, invert) and writeImage(landscape, LOCK_LANDSCAPE, false, invert)
     logger.info("PocketBookPlus lockscreen: lock images written (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
     if ok then requestReload(reason) end
@@ -676,7 +687,7 @@ end
 -- DeviceListener saves the new night_mode setting while handling the same
 -- event, so read it on the next tick.
 function LockScreen.onToggleNightMode(ctx)
-    if not nightNormal() then return end
+    if not nightNormal() and mode() ~= MODE_STATS then return end
     UIManager:nextTick(function() refresh(ctx, "night mode") end)
 end
 LockScreen.onSetNightMode = LockScreen.onToggleNightMode
@@ -773,7 +784,7 @@ function LockScreen.menuItems(ctx)
         },
         {
             text = _("Keep normal colours in night mode"),
-            help_text = _("The lock screen is shown inverted while KOReader is in night mode. With this on, the image is stored pre-inverted so it appears in its normal colours. Rewritten whenever night mode is switched."),
+            help_text = _("The lock screen is shown inverted while KOReader is in night mode. With this on, the image is stored pre-inverted so it appears in its normal colours. Rewritten whenever night mode is switched. The reading stats screen is drawn dark in night mode instead; with this on it stays light."),
             checked_func = nightNormal,
             callback = function()
                 save("night_normal", not nightNormal())
