@@ -291,7 +291,7 @@ end
 -------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------
--- Battery statistics: tapping the title closes the window
+-- Battery statistics: redraw on close; tapping the title closes it
 -------------------------------------------------------------------------------
 
 local function isBatteryTitleEnabled() return readBool(BATTERY_TITLE_KEY, true) end
@@ -308,9 +308,17 @@ local function patchBatteryStatTitle()
     local orig_init = KeyValuePage.init
     KeyValuePage.init = function(page, ...)
         orig_init(page, ...)
-        if not (active and isBatteryTitleEnabled()) then return end
+        if not active then return end
         if type(page.title) ~= "string" or page.title:sub(1, #battery_title) ~= battery_title then return end
-        if not (page.title_bar and Device:isTouchDevice()) then return end
+        -- Closing only redraws the corner the close button sat in, leaving the
+        -- window's image on screen over whatever is underneath.
+        local orig_close = page.onClose
+        page.onClose = function(...)
+            local result = orig_close(...)
+            UIManager:setDirty("all", "ui")
+            return result
+        end
+        if not (isBatteryTitleEnabled() and page.title_bar and Device:isTouchDevice()) then return end
         page.ges_events = page.ges_events or {}
         page.ges_events.PBPTapTitleClose = {
             GestureRange:new{ ges = "tap", range = function() return page.title_bar.dimen end },
