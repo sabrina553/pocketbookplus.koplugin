@@ -17,6 +17,7 @@ local _ = require("gettext")
 local HOME_KEY = "fixes.home_back"
 local ROTATION_KEY = "fixes.rotation_map"
 local ORIENTATION_KEY = "fixes.orientation_mode"
+local BATTERY_TITLE_KEY = "fixes.battery_title_closes"
 
 local Fixes = {
     id = "fixes",
@@ -289,6 +290,36 @@ end
 -- Module hooks
 -------------------------------------------------------------------------------
 
+-------------------------------------------------------------------------------
+-- Battery statistics: tapping the title closes the window
+-------------------------------------------------------------------------------
+
+local function isBatteryTitleEnabled() return readBool(BATTERY_TITLE_KEY, true) end
+
+-- The batterystat plugin keeps its window in a local, so the shared
+-- KeyValuePage is wrapped once and only pages titled like it get the tap.
+local kv_patched = false
+local function patchBatteryStatTitle()
+    if kv_patched then return end
+    local ok, KeyValuePage = pcall(require, "ui/widget/keyvaluepage")
+    if not ok then return end
+    local GestureRange = require("ui/gesturerange")
+    local battery_title = _("Battery statistics")
+    local orig_init = KeyValuePage.init
+    KeyValuePage.init = function(page, ...)
+        orig_init(page, ...)
+        if not (active and isBatteryTitleEnabled()) then return end
+        if type(page.title) ~= "string" or page.title:sub(1, #battery_title) ~= battery_title then return end
+        if not (page.title_bar and Device:isTouchDevice()) then return end
+        page.ges_events = page.ges_events or {}
+        page.ges_events.PBPTapTitleClose = {
+            GestureRange:new{ ges = "tap", range = function() return page.title_bar.dimen end },
+        }
+        page.onPBPTapTitleClose = function() page:onClose() return true end
+    end
+    kv_patched = true
+end
+
 local function applyAll(on)
     active = on
     if Device:hasKeys() then
@@ -301,6 +332,7 @@ end
 function Fixes.init(ctx)
     settings = ctx.registry.settings
     applyAll(true)
+    patchBatteryStatTitle()
     if orientationSupported() then
         startInkViewPoll()
         -- Plugins are created before the reader restores the document's own
@@ -351,6 +383,14 @@ On PocketBook, set the firmware's Home short-press action to "none" so the press
                 settings:save(ROTATION_KEY, not isRotationEnabled())
                 if active then applyRotation(isRotationEnabled()) end
             end,
+        })
+    end
+    if Device:isTouchDevice() then
+        table.insert(items, {
+            text = _("Tap the battery statistics title to close it"),
+            help_text = _([[KOReader's battery statistics window only closes from the small ✕ in its corner. With this on, tapping anywhere on its title bar closes it too.]]),
+            checked_func = isBatteryTitleEnabled,
+            callback = function() settings:save(BATTERY_TITLE_KEY, not isBatteryTitleEnabled()) end,
         })
     end
     if orientationSupported() then
