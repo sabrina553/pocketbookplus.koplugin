@@ -113,4 +113,15 @@ function PBConfig.set(key, value, path)
     return true
 end
 
+-- Fixed text, run in the background so a slow iv2sh never stalls the reader.
+-- Never call while going to sleep: it leaves the device half asleep.
+local RELOAD_CMD =
+    [[(sync; p=$(ps | grep '[t]askmgr\.app' | grep -v visualizer | awk '{print $1}' | head -n 1); ]] ..
+    [[[ -n "$p" ] && /ebrmain/bin/iv2sh SendEventTo "$p" 154 0) >/dev/null 2>&1 &]]
+
+--- Asks the firmware's task manager to reload its settings and lock images.
+function PBConfig.reloadTaskmgr()
+    os.execute(RELOAD_CMD)
+end
+
 return PBConfig
