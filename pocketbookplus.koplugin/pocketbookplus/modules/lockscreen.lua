@@ -441,18 +441,23 @@ end
 -- Boot screen: a capture of the panel
 -------------------------------------------------------------------------------
 
--- Rotation and inverse cleared, so the capture is what the panel shows.
-local function capturePanel()
+-- Only the reader's page view is drawn, so menus and pop-ups open on top of
+-- it are left out. The canvas takes the screen's rotation and inverse while
+-- drawing, then both are cleared so the result is what the panel would show.
+local function capturePage(ctx)
     local fb = Device.screen.bb
     local rotation, inverse = fb:getRotation(), fb:getInverse()
     fb:setRotation(0)
-    fb:setInverse(0)
     local w, h = fb:getWidth(), fb:getHeight()
-    local dump = Blitbuffer.new(w, h, Blitbuffer.TYPE_BB8)
-    dump:blitFrom(fb, 0, 0, 0, 0, w, h)
     fb:setRotation(rotation)
-    fb:setInverse(inverse)
-    return dump
+    local page = Blitbuffer.new(w, h, Blitbuffer.TYPE_BB8)
+    page:setRotation(rotation)
+    page:setInverse(inverse)
+    page:fill(Blitbuffer.COLOR_WHITE)
+    ctx.ui.view:paintTo(page, 0, 0)
+    page:setRotation(0)
+    page:setInverse(0)
+    return page
 end
 
 -- Sparse fingerprint, enough to skip rewriting the flash for the same page.
@@ -472,10 +477,10 @@ end
 
 -- The firmware suspends the CPU a few seconds after the last input whatever
 -- runs, and the tool takes seconds, so auto-standby is held off meanwhile.
-local function writeBootImage(reason)
+local function writeBootImage(ctx, reason)
     if not bootLogo() then return end
     local ok, err = pcall(function()
-        local dump = capturePanel()
+        local dump = capturePage(ctx)
         local hash = quickHash(dump)
         if hash == State.boot_hash then dump:free() return end
         local written = dump:writeToFile(BOOT_IMAGE, "bmp", 100, true)
@@ -642,11 +647,11 @@ function LockScreen.onSuspend(ctx)
         State.stats_job = nil
         writeStatsIfDue(ctx, "suspend")
     end
-    writeBootImage("suspend")
+    writeBootImage(ctx, "suspend")
 end
 
 function LockScreen.onPowerOff(ctx)
-    if inReader(ctx) then writeBootImage("power off") end
+    if inReader(ctx) then writeBootImage(ctx, "power off") end
 end
 LockScreen.onReboot = LockScreen.onPowerOff
 
