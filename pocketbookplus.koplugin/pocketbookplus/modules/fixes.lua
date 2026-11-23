@@ -18,6 +18,7 @@ local HOME_KEY = "fixes.home_back"
 local ROTATION_KEY = "fixes.rotation_map"
 local ORIENTATION_KEY = "fixes.orientation_mode"
 local BATTERY_TITLE_KEY = "fixes.battery_title_closes"
+local DARK_LINK_KEY = "fixes.link_dark_mode"
 
 local Fixes = {
     id = "fixes",
@@ -337,10 +338,90 @@ local function applyAll(on)
     if not on then stopInkViewPoll() end
 end
 
+-------------------------------------------------------------------------------
+-- PocketBook dark mode follows KOReader's night mode
+-------------------------------------------------------------------------------
+
+-- The firmware's dark mode sets both keys together.
+local DARK_KEYS = { "night_mode", "screen_mode_inverted" }
+
+local function isDarkLinkEnabled() return readBool(DARK_LINK_KEY, true) end
+
+-- The firmware reads global.cfg only at start-up, so the running system is
+-- switched through InkView as well (iv2sh can read this mode but not set it).
+local function inkview()
+    local ffi = require("ffi")
+    pcall(ffi.cdef, "void IvSetScreenModeInversion(int); int IvGetScreenModeInversion(void);")
+    return ffi.load("inkview")
+end
+
+local function setFirmwareInversion(on)
+    local ok, err = pcall(function()
+        local iv = inkview()
+        iv.IvSetScreenModeInversion(on and 1 or 0)
+        return iv.IvGetScreenModeInversion()
+    end)
+    logger.info("PocketBookPlus fixes: InkView screen inversion ->", on, ok and "now " .. tostring(err) or err)
+end
+
+local function firmwareDark()
+    local ok, v = pcall(function() return inkview().IvGetScreenModeInversion() end)
+    if ok then return v ~= 0 end
+    return require("pocketbookplus/pbconfig").get("screen_mode_inverted") == "1"
+end
+
+local function syncDarkMode(reason)
+    if not (active and isDarkLinkEnabled()) then return end
+    local PBConfig = require("pocketbookplus/pbconfig")
+    local night = Device.screen.night_mode and true or false
+    local want = night and "1" or "0"
+    local changed = false
+    for _i, k in ipairs(DARK_KEYS) do
+        if PBConfig.get(k) ~= want then
+            local ok, err = PBConfig.set(k, want)
+            logger.info("PocketBookPlus fixes: firmware", k, "->", want, ok and "ok" or err)
+            changed = changed or ok
+        end
+    end
+    if changed then
+        setFirmwareInversion(night)
+        PBConfig.reloadTaskmgr()
+        logger.info("PocketBookPlus fixes: dark mode synced (" .. reason .. ")")
+    end
+end
+
+-- The firmware is the source of truth: when KOReader starts, wakes or comes
+-- back to the front, it takes the firmware's dark mode. The toggle hook below
+-- then finds both sides equal and writes nothing.
+local function adoptFirmwareDarkMode(reason)
+    if not (active and isDarkLinkEnabled()) then return end
+    local dark = firmwareDark()
+    if dark == (Device.screen.night_mode and true or false) then return end
+    logger.info("PocketBookPlus fixes: night mode follows firmware (" .. reason .. ") ->", dark)
+    UIManager:broadcastEvent(require("ui/event"):new("SetNightMode", dark))
+end
+
+-- Hooked on the screen rather than the ToggleNightMode event, because other
+-- plugins (zenos' quick menu and schedule) call Screen:toggleNightMode()
+-- directly. Installed once per process; the screen outlives plugin instances.
+local function hookScreenNightMode()
+    local screen = Device.screen
+    if not screen or screen._pbplus_night_hook or type(screen.toggleNightMode) ~= "function" then return end
+    local orig = screen.toggleNightMode
+    screen.toggleNightMode = function(...)
+        local result = orig(...)
+        UIManager:nextTick(syncDarkMode, "night mode")
+        return result
+    end
+    screen._pbplus_night_hook = true
+end
+
 function Fixes.init(ctx)
     settings = ctx.registry.settings
     applyAll(true)
     patchBatteryStatTitle()
+    hookScreenNightMode()
+    UIManager:nextTick(adoptFirmwareDarkMode, "start")
     if orientationSupported() then
         startInkViewPoll()
         -- Plugins are created before the reader restores the document's own
@@ -355,7 +436,11 @@ function Fixes.onToggle(ctx, on)
 end
 
 -- PocketBookPowerD's own orientation sync runs after the Resume broadcast.
+-- Not deferred: switching before KOReader's own wake repaint avoids drawing
+-- the page twice. Returning from the firmware's panel or settings
+-- (EVT_FOREGROUND) also arrives as Resume.
 function Fixes.onResume()
+    adoptFirmwareDarkMode("resume")
     if orientationSupported() and orientationMode() ~= "off" then
         UIManager:nextTick(syncOrientation, "resume")
         startInkViewPoll()
@@ -401,6 +486,15 @@ On PocketBook, set the firmware's Home short-press action to "none" so the press
             callback = function() settings:save(BATTERY_TITLE_KEY, not isBatteryTitleEnabled()) end,
         })
     end
+    table.insert(items, {
+        text = _("Link night mode with PocketBook dark mode"),
+        help_text = _([[Switching KOReader's night mode also switches the PocketBook's own dark mode, so the lock screen and firmware screens match. The PocketBook's setting wins: when KOReader starts or wakes, it takes the firmware's dark mode.]]),
+        checked_func = isDarkLinkEnabled,
+        callback = function()
+            settings:save(DARK_LINK_KEY, not isDarkLinkEnabled())
+            adoptFirmwareDarkMode("setting")
+        end,
+    })
     if orientationSupported() then
         local function modeItem(mode, text)
             return {
