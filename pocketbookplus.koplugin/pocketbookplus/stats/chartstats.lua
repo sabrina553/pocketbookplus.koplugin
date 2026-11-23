@@ -82,23 +82,32 @@ local function getRecentBooks(conn, count, exclude_id)
             HAVING sum(duration) >= 300
         ) ps ON ps.id_book = b.id
         WHERE b.id != %d
+          -- A book renamed in its metadata keeps its file, so it can have a
+          -- second record with the same md5: that's still the current book.
+          AND b.md5 IS NOT (SELECT md5 FROM book WHERE id = %d)
         ORDER BY b.last_open DESC
         LIMIT %d;
-    ]], exclude_id or -1, count)
+    ]], exclude_id or -1, exclude_id or -1, count * 2) -- spare rows for the md5 dedupe below
     local res = conn:exec(sql)
     local books = {}
+    local seen_md5 = {}
     if res and res[1] then
         for i = 1, #res[1] do
+            local md5 = type(res.md5[i]) == "string" and res.md5[i] or nil
+            if #books >= count then break end
+            if md5 and seen_md5[md5] then goto continue end
+            if md5 then seen_md5[md5] = true end
             local pages = tonumber(res.pages[i]) or 0
             local distinct_pages = tonumber(res.distinct_pages[i]) or 0
             table.insert(books, {
                 title = type(res.title[i]) == "string" and res.title[i] or nil,
                 authors = type(res.authors[i]) == "string" and res.authors[i] or nil,
-                md5 = type(res.md5[i]) == "string" and res.md5[i] or nil,
+                md5 = md5,
                 read_seconds = tonumber(res.read_seconds[i]) or 0,
                 span_days = math.floor(tonumber(res.span_days[i]) or 0),
                 finished = pages > 0 and distinct_pages >= pages * 0.95,
             })
+            ::continue::
         end
     end
     return books

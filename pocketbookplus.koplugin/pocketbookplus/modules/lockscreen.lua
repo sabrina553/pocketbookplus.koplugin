@@ -47,11 +47,6 @@ local BACKUP_SUFFIX = ".orig"
 local CUSTOM_DIR = "/mnt/ext1/lockscreens"
 local IMAGE_EXTS = { bmp = true, png = true, jpg = true, jpeg = true, gif = true, webp = true }
 
--- Fixed text, run in the background so a slow iv2sh never stalls the reader.
-local RELOAD_CMD =
-    [[(sync; p=$(ps | grep '[t]askmgr\.app' | grep -v visualizer | awk '{print $1}' | head -n 1); ]] ..
-    [[[ -n "$p" ] && /ebrmain/bin/iv2sh SendEventTo "$p" 154 0) >/dev/null 2>&1 &]]
-
 local BOOT_IMAGE = "/tmp/pocketbookplus_boot.bmp"
 local BOOT_TOOL = "/ebrmain/bin/iv2sh"
 
@@ -84,14 +79,20 @@ local function mode() return setting("mode", MODE_COVER) end
 local function progressBar() return setting("progress_bar", true) end
 local function powerOff() return setting("poweroff", true) end
 local function bootLogo() return setting("bootlogo", false) end
-local function fillScreen() return setting("fill", true) end
-local function nightNormal() return setting("night_normal", false) end
-
--- The lock screen comes up inverted while KOReader is in night mode. With
--- "Keep normal colours" the image is stored pre-inverted so the two cancel.
-local function invertForNight()
-    return nightNormal() and G_reader_settings:isTrue("night_mode")
+-- "fit", "fill" or "stretch". The boolean `lockscreen.fill` is still read so
+-- settings saved before `scaling` existed keep their look.
+local SCALINGS = { fit = true, fill = true, stretch = true }
+local function scalingFrom(scaling, fill)
+    if SCALINGS[scaling] then return scaling end
+    if fill == false then return "fit" end
+    return "fill"
 end
+local function scaling()
+    return scalingFrom(settings:read("lockscreen.scaling"), settings:read("lockscreen.fill"))
+end
+
+-- Images are always stored in normal colours: the firmware inverts the lock
+-- screen itself when PocketBook dark mode (screen_mode_inverted) is on.
 
 -------------------------------------------------------------------------------
 -- Custom images
@@ -163,8 +164,20 @@ local function blitFilled(bb, img, w, h)
     if scaled ~= img then scaled:free() end
 end
 
+-- Scales each axis independently to the screen size, ignoring the aspect
+-- ratio: nothing is cropped and there are no bands, at the cost of a slightly
+-- wider image (~12% for a 2:3 cover on a 3:4 panel).
+local function blitStretched(bb, img, w, h)
+    local scaled = RenderImage:scaleBlitBuffer(img, w, h, false)
+    bb:blitFrom(scaled, 0, 0, 0, 0, w, h)
+    if scaled ~= img then scaled:free() end
+end
+
 local function blitImage(bb, img, w, h)
-    if fillScreen() then blitFilled(bb, img, w, h) else blitCentred(bb, img, w, h) end
+    local s = scaling()
+    if s == "fill" then blitFilled(bb, img, w, h)
+    elseif s == "stretch" then blitStretched(bb, img, w, h)
+    else blitCentred(bb, img, w, h) end
 end
 
 local function paintTitle(bb, w, h)
@@ -225,16 +238,27 @@ local function composeCover(w, h, with_progress)
     return bb
 end
 
-local function composeStats(w, h, ctx)
-    local ok, bb = pcall(function()
+-- Collected once per write and drawn in both orientations.
+local function collectStats()
+    local ok, data = pcall(function()
         local DataStorage = require("datastorage")
         local ChartStats = require("pocketbookplus/stats/chartstats")
+        -- Without a heading there is room for two more recent books.
+        return ChartStats.collect(DataStorage:getSettingsDir() .. "/statistics.sqlite3",
+            { recent_count = setting("stats_signature", "") ~= "" and 4 or 6 })
+    end)
+    if not ok then
+        logger.warn("PocketBookPlus lockscreen: stats collect failed:", data)
+        return nil
+    end
+    return data
+end
+
+local function composeStats(w, h, ctx, data)
+    local ok, bb = pcall(function()
         local ChartCovers = require("pocketbookplus/stats/chartcovers")
         local ChartRender = require("pocketbookplus/stats/chartrender")
         local signature = setting("stats_signature", "")
-        -- Without a heading there is room for two more recent books.
-        local data = ChartStats.collect(DataStorage:getSettingsDir() .. "/statistics.sqlite3",
-            { recent_count = signature ~= "" and 4 or 6 })
         if data then
             local cur_w, thumb_w = math.floor(w * 0.18), math.floor(w * 0.07)
             ChartCovers.attach(data, {
@@ -243,7 +267,10 @@ local function composeStats(w, h, ctx)
                 thumb_box = { w = thumb_w, h = math.floor(thumb_w * 1.5) },
             })
         end
-        local out = ChartRender.build(data, w, h, { signature = signature ~= "" and signature or nil, footer = false })
+        local out = ChartRender.build(data, w, h, {
+            signature = signature ~= "" and signature or nil,
+            footer = false,
+        })
         ChartCovers.release(data)
         return out
     end)
@@ -280,10 +307,9 @@ local function orientForPanel(bb)
     return bb
 end
 
-local function writeImage(bb, path, orient, invert)
+local function writeImage(bb, path, orient)
     if not bb then return false end
     if orient then bb = orientForPanel(bb) end
-    if invert then bb:invertRect(0, 0, bb:getWidth(), bb:getHeight()) end
     -- Written aside and renamed, so the firmware never reads a half-written file.
     local tmp = path .. ".tmp"
     local ok = bb:writeToFile(tmp, "bmp", 100, true)
@@ -327,28 +353,9 @@ local function bmpSize(path)
     return le32(19), math.abs(le32(23)) -- height is negative for top-down rows
 end
 
--- Copies a BMP, optionally inverting every pixel byte. Works for 24- and
--- 32-bit files without decoding: each byte is one colour channel, and
--- inverting the row padding too is harmless.
-local function copyFile(src, dst, invert)
+local function copyFile(src, dst)
     local tmp = dst .. ".tmp"
-    if invert then
-        local f = io.open(src, "rb")
-        if not f then return false end
-        local data = f:read("*a")
-        f:close()
-        local a, b, c, d = data:byte(11, 14)
-        local offset = a + b * 256 + c * 65536 + d * 16777216
-        local bpp = data:byte(29) + data:byte(30) * 256
-        if bpp < 24 then return false end -- palette images would need the palette inverted instead
-        local buf = ffi.new("uint8_t[?]", #data)
-        ffi.copy(buf, data, #data)
-        for i = offset, #data - 1 do buf[i] = 255 - buf[i] end
-        local out = io.open(tmp, "wb")
-        if not out then return false end
-        out:write(ffi.string(buf, #data))
-        out:close()
-    elseif ffiutil.copyFile(src, tmp) then -- returns an error message on failure
+    if ffiutil.copyFile(src, tmp) then -- returns an error message on failure
         os.remove(tmp)
         return false
     end
@@ -376,7 +383,7 @@ local function requestReload(reason)
         return
     end
     State.pending_reload = false
-    os.execute(RELOAD_CMD)
+    PBConfig.reloadTaskmgr()
     logger.info("PocketBookPlus lockscreen: asked taskmgr to reload (" .. tostring(reason) .. ")")
 end
 
@@ -384,7 +391,8 @@ local function writeLockImages(reason, ctx)
     local w, h = panelSize()
     local portrait, landscape
     if mode() == MODE_STATS then
-        portrait, landscape = composeStats(w, h, ctx), composeStats(h, w, ctx)
+        local data = collectStats()
+        portrait, landscape = composeStats(w, h, ctx, data), composeStats(h, w, ctx, data)
         State.stats_written_at = os.time()
         if not portrait then return false end
     elseif mode() == MODE_COVER then
@@ -404,8 +412,8 @@ local function writeLockImages(reason, ctx)
             util.makePath(LINE_DIR)
             backupOnce(LOCK_PORTRAIT)
             backupOnce(LOCK_LANDSCAPE)
-            local ok = copyFile(path, LOCK_PORTRAIT, invertForNight())
-                and writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE, false, invertForNight())
+            local ok = copyFile(path, LOCK_PORTRAIT)
+                and writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE, false)
             logger.info("PocketBookPlus lockscreen: custom image copied (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
             if ok then requestReload(reason) end
             return ok
@@ -415,8 +423,7 @@ local function writeLockImages(reason, ctx)
     util.makePath(LINE_DIR)
     backupOnce(LOCK_PORTRAIT)
     backupOnce(LOCK_LANDSCAPE)
-    local invert = invertForNight()
-    local ok = writeImage(portrait, LOCK_PORTRAIT, false, invert) and writeImage(landscape, LOCK_LANDSCAPE, false, invert)
+    local ok = writeImage(portrait, LOCK_PORTRAIT, false) and writeImage(landscape, LOCK_LANDSCAPE, false)
     logger.info("PocketBookPlus lockscreen: lock images written (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
     if ok then requestReload(reason) end
     return ok
@@ -434,18 +441,23 @@ end
 -- Boot screen: a capture of the panel
 -------------------------------------------------------------------------------
 
--- Rotation and inverse cleared, so the capture is what the panel shows.
-local function capturePanel()
+-- Only the reader's page view is drawn, so menus and pop-ups open on top of
+-- it are left out. The canvas takes the screen's rotation and inverse while
+-- drawing, then both are cleared so the result is what the panel would show.
+local function capturePage(ctx)
     local fb = Device.screen.bb
     local rotation, inverse = fb:getRotation(), fb:getInverse()
     fb:setRotation(0)
-    fb:setInverse(0)
     local w, h = fb:getWidth(), fb:getHeight()
-    local dump = Blitbuffer.new(w, h, Blitbuffer.TYPE_BB8)
-    dump:blitFrom(fb, 0, 0, 0, 0, w, h)
     fb:setRotation(rotation)
-    fb:setInverse(inverse)
-    return dump
+    local page = Blitbuffer.new(w, h, Blitbuffer.TYPE_BB8)
+    page:setRotation(rotation)
+    page:setInverse(inverse)
+    page:fill(Blitbuffer.COLOR_WHITE)
+    ctx.ui.view:paintTo(page, 0, 0)
+    page:setRotation(0)
+    page:setInverse(0)
+    return page
 end
 
 -- Sparse fingerprint, enough to skip rewriting the flash for the same page.
@@ -465,10 +477,10 @@ end
 
 -- The firmware suspends the CPU a few seconds after the last input whatever
 -- runs, and the tool takes seconds, so auto-standby is held off meanwhile.
-local function writeBootImage(reason)
+local function writeBootImage(ctx, reason)
     if not bootLogo() then return end
     local ok, err = pcall(function()
-        local dump = capturePanel()
+        local dump = capturePage(ctx)
         local hash = quickHash(dump)
         if hash == State.boot_hash then dump:free() return end
         local written = dump:writeToFile(BOOT_IMAGE, "bmp", 100, true)
@@ -630,11 +642,16 @@ function LockScreen.onSuspend(ctx)
     if UIManager:unschedule(writeProgressIfChanged) then
         writeProgressIfChanged("suspend")
     end
-    writeBootImage("suspend")
+    -- Left pending it would fire on wake and stall the reader while it draws.
+    if State.stats_job and UIManager:unschedule(State.stats_job) then
+        State.stats_job = nil
+        writeStatsIfDue(ctx, "suspend")
+    end
+    writeBootImage(ctx, "suspend")
 end
 
 function LockScreen.onPowerOff(ctx)
-    if inReader(ctx) then writeBootImage("power off") end
+    if inReader(ctx) then writeBootImage(ctx, "power off") end
 end
 LockScreen.onReboot = LockScreen.onPowerOff
 
@@ -656,16 +673,22 @@ local function refresh(ctx, reason)
     return writeLockImages(reason, ctx)
 end
 
--- DeviceListener saves the new night_mode setting while handling the same
--- event, so read it on the next tick.
-function LockScreen.onToggleNightMode(ctx)
-    if not nightNormal() then return end
-    UIManager:nextTick(function() refresh(ctx, "night mode") end)
-end
-LockScreen.onSetNightMode = LockScreen.onToggleNightMode
-
 function LockScreen.menuItems(ctx)
     settings = ctx.registry.settings
+    local function scalingItem(s, text, help)
+        return {
+            text = text,
+            help_text = help,
+            radio = true,
+            checked_func = function() return scaling() == s end,
+            callback = function()
+                save("scaling", s)
+                refresh(ctx, "setting")
+                if mode() == MODE_COVER and inReader(ctx) then writePowerOff("setting") end
+            end,
+        }
+    end
+
     local function modeItem(m, text, help)
         return {
             text = text,
@@ -736,14 +759,16 @@ function LockScreen.menuItems(ctx)
             separator = true,
         },
         {
-            text = _("Fill the screen (crop edges)"),
-            help_text = _("Scales the image until it covers the whole screen and trims what overflows, instead of fitting it with white bands at the sides. Applies to the lock and power-off screens."),
-            checked_func = fillScreen,
-            callback = function()
-                save("fill", not fillScreen())
-                refresh(ctx, "setting")
-                if mode() == MODE_COVER and inReader(ctx) then writePowerOff("setting") end
-            end,
+            text = _("Cover scaling"),
+            help_text = _("How the image is fitted to the screen when its shape differs. Applies to the lock and power-off screens."),
+            sub_item_table = {
+                scalingItem("fit", _("Fit (white bands)"),
+                    _("Keeps the whole image and its proportions, leaving white bands at the sides or top and bottom.")),
+                scalingItem("fill", _("Fill (crop edges)"),
+                    _("Scales the image until it covers the whole screen and trims what overflows.")),
+                scalingItem("stretch", _("Stretch (ignore aspect ratio)"),
+                    _("Stretches the image to the screen's exact size. Nothing is cut off, but the image is slightly distorted.")),
+            },
         },
         {
             text = _("Progress bar on the cover"),
@@ -751,15 +776,6 @@ function LockScreen.menuItems(ctx)
             checked_func = progressBar,
             callback = function()
                 save("progress_bar", not progressBar())
-                refresh(ctx, "setting")
-            end,
-        },
-        {
-            text = _("Keep normal colours in night mode"),
-            help_text = _("The lock screen is shown inverted while KOReader is in night mode. With this on, the image is stored pre-inverted so it appears in its normal colours. Rewritten whenever night mode is switched."),
-            checked_func = nightNormal,
-            callback = function()
-                save("night_normal", not nightNormal())
                 refresh(ctx, "setting")
             end,
         },
@@ -807,5 +823,8 @@ function LockScreen.menuItems(ctx)
         },
     }
 end
+
+-- Exposed for tests.
+LockScreen._scalingFrom = scalingFrom
 
 return LockScreen
