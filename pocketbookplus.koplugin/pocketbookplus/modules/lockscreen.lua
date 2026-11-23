@@ -47,11 +47,6 @@ local BACKUP_SUFFIX = ".orig"
 local CUSTOM_DIR = "/mnt/ext1/lockscreens"
 local IMAGE_EXTS = { bmp = true, png = true, jpg = true, jpeg = true, gif = true, webp = true }
 
--- Fixed text, run in the background so a slow iv2sh never stalls the reader.
-local RELOAD_CMD =
-    [[(sync; p=$(ps | grep '[t]askmgr\.app' | grep -v visualizer | awk '{print $1}' | head -n 1); ]] ..
-    [[[ -n "$p" ] && /ebrmain/bin/iv2sh SendEventTo "$p" 154 0) >/dev/null 2>&1 &]]
-
 local BOOT_IMAGE = "/tmp/pocketbookplus_boot.bmp"
 local BOOT_TOOL = "/ebrmain/bin/iv2sh"
 
@@ -397,7 +392,7 @@ local function requestReload(reason)
         return
     end
     State.pending_reload = false
-    os.execute(RELOAD_CMD)
+    PBConfig.reloadTaskmgr()
     logger.info("PocketBookPlus lockscreen: asked taskmgr to reload (" .. tostring(reason) .. ")")
 end
 
