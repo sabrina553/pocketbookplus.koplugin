@@ -28,7 +28,9 @@ local function isWifiProgress(widget)
     local cls = getmetatable(widget)
     if cls ~= InfoMessage and cls ~= Notification then return false end
     if type(widget.text) ~= "string" then return false end
-    local s = widget.text:lower()
+    -- Only the first line is the message; later lines are details, such as
+    -- the SSH pop-up's "Could not retrieve network info." while Wi-Fi is down.
+    local s = widget.text:match("^[^\n]*"):lower()
     return contains(s, PATTERNS) and not contains(s, FAILURES)
 end
 
