@@ -80,19 +80,9 @@ local function progressBar() return setting("progress_bar", true) end
 local function powerOff() return setting("poweroff", true) end
 local function bootLogo() return setting("bootlogo", false) end
 local function fillScreen() return setting("fill", true) end
-local function nightNormal() return setting("night_normal", false) end
 
--- The lock screen comes up inverted while KOReader is in night mode. With
--- "Keep normal colours" the image is stored pre-inverted so the two cancel.
-local function invertForNight()
-    return nightNormal() and G_reader_settings:isTrue("night_mode")
-end
-
--- The stats screen is drawn by us, so night mode gets its own dark palette
--- rather than a blunt inversion that would also flip the cover thumbnails.
-local function statsDark()
-    return G_reader_settings:isTrue("night_mode") and not nightNormal()
-end
+-- Images are always stored in normal colours: the firmware inverts the lock
+-- screen itself when PocketBook dark mode (screen_mode_inverted) is on.
 
 -------------------------------------------------------------------------------
 -- Custom images
@@ -242,7 +232,7 @@ local function collectStats()
     return data
 end
 
-local function composeStats(w, h, ctx, data, dark)
+local function composeStats(w, h, ctx, data)
     local ok, bb = pcall(function()
         local ChartCovers = require("pocketbookplus/stats/chartcovers")
         local ChartRender = require("pocketbookplus/stats/chartrender")
@@ -258,7 +248,6 @@ local function composeStats(w, h, ctx, data, dark)
         local out = ChartRender.build(data, w, h, {
             signature = signature ~= "" and signature or nil,
             footer = false,
-            invert = dark,
         })
         ChartCovers.release(data)
         return out
@@ -296,10 +285,9 @@ local function orientForPanel(bb)
     return bb
 end
 
-local function writeImage(bb, path, orient, invert)
+local function writeImage(bb, path, orient)
     if not bb then return false end
     if orient then bb = orientForPanel(bb) end
-    if invert then bb:invertRect(0, 0, bb:getWidth(), bb:getHeight()) end
     -- Written aside and renamed, so the firmware never reads a half-written file.
     local tmp = path .. ".tmp"
     local ok = bb:writeToFile(tmp, "bmp", 100, true)
@@ -343,28 +331,9 @@ local function bmpSize(path)
     return le32(19), math.abs(le32(23)) -- height is negative for top-down rows
 end
 
--- Copies a BMP, optionally inverting every pixel byte. Works for 24- and
--- 32-bit files without decoding: each byte is one colour channel, and
--- inverting the row padding too is harmless.
-local function copyFile(src, dst, invert)
+local function copyFile(src, dst)
     local tmp = dst .. ".tmp"
-    if invert then
-        local f = io.open(src, "rb")
-        if not f then return false end
-        local data = f:read("*a")
-        f:close()
-        local a, b, c, d = data:byte(11, 14)
-        local offset = a + b * 256 + c * 65536 + d * 16777216
-        local bpp = data:byte(29) + data:byte(30) * 256
-        if bpp < 24 then return false end -- palette images would need the palette inverted instead
-        local buf = ffi.new("uint8_t[?]", #data)
-        ffi.copy(buf, data, #data)
-        for i = offset, #data - 1 do buf[i] = 255 - buf[i] end
-        local out = io.open(tmp, "wb")
-        if not out then return false end
-        out:write(ffi.string(buf, #data))
-        out:close()
-    elseif ffiutil.copyFile(src, tmp) then -- returns an error message on failure
+    if ffiutil.copyFile(src, tmp) then -- returns an error message on failure
         os.remove(tmp)
         return false
     end
@@ -401,8 +370,7 @@ local function writeLockImages(reason, ctx)
     local portrait, landscape
     if mode() == MODE_STATS then
         local data = collectStats()
-        local dark = statsDark()
-        portrait, landscape = composeStats(w, h, ctx, data, dark), composeStats(h, w, ctx, data, dark)
+        portrait, landscape = composeStats(w, h, ctx, data), composeStats(h, w, ctx, data)
         State.stats_written_at = os.time()
         if not portrait then return false end
     elseif mode() == MODE_COVER then
@@ -422,8 +390,8 @@ local function writeLockImages(reason, ctx)
             util.makePath(LINE_DIR)
             backupOnce(LOCK_PORTRAIT)
             backupOnce(LOCK_LANDSCAPE)
-            local ok = copyFile(path, LOCK_PORTRAIT, invertForNight())
-                and writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE, false, invertForNight())
+            local ok = copyFile(path, LOCK_PORTRAIT)
+                and writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE, false)
             logger.info("PocketBookPlus lockscreen: custom image copied (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
             if ok then requestReload(reason) end
             return ok
@@ -433,8 +401,7 @@ local function writeLockImages(reason, ctx)
     util.makePath(LINE_DIR)
     backupOnce(LOCK_PORTRAIT)
     backupOnce(LOCK_LANDSCAPE)
-    local invert = mode() ~= MODE_STATS and invertForNight()
-    local ok = writeImage(portrait, LOCK_PORTRAIT, false, invert) and writeImage(landscape, LOCK_LANDSCAPE, false, invert)
+    local ok = writeImage(portrait, LOCK_PORTRAIT, false) and writeImage(landscape, LOCK_LANDSCAPE, false)
     logger.info("PocketBookPlus lockscreen: lock images written (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
     if ok then requestReload(reason) end
     return ok
@@ -679,14 +646,6 @@ local function refresh(ctx, reason)
     return writeLockImages(reason, ctx)
 end
 
--- DeviceListener saves the new night_mode setting while handling the same
--- event, so read it on the next tick.
-function LockScreen.onToggleNightMode(ctx)
-    if not nightNormal() and mode() ~= MODE_STATS then return end
-    UIManager:nextTick(function() refresh(ctx, "night mode") end)
-end
-LockScreen.onSetNightMode = LockScreen.onToggleNightMode
-
 function LockScreen.menuItems(ctx)
     settings = ctx.registry.settings
     local function modeItem(m, text, help)
@@ -774,15 +733,6 @@ function LockScreen.menuItems(ctx)
             checked_func = progressBar,
             callback = function()
                 save("progress_bar", not progressBar())
-                refresh(ctx, "setting")
-            end,
-        },
-        {
-            text = _("Keep normal colours in night mode"),
-            help_text = _("The lock screen is shown inverted while KOReader is in night mode. With this on, the image is stored pre-inverted so it appears in its normal colours. Rewritten whenever night mode is switched. The reading stats screen is drawn dark in night mode instead; with this on it stays light."),
-            checked_func = nightNormal,
-            callback = function()
-                save("night_normal", not nightNormal())
                 refresh(ctx, "setting")
             end,
         },
