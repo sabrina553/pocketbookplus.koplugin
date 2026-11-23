@@ -22,6 +22,7 @@ local MODULES = {
     "pocketbookplus/modules/setup",
     "pocketbookplus/modules/appearance",
     "pocketbookplus/modules/patches",
+    "pocketbookplus/modules/reader",
 }
 
 local PocketBookPlus = WidgetContainer:extend {
