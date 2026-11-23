@@ -75,4 +75,10 @@ walk(top.sub_item_table)
 
 assert(Device.input.event_map[1] == "Back", "Home is remapped to Back by default")
 assert(theme_on == false, "appearance is off after toggling on and off again")
+local scalingFrom = require("pocketbookplus/modules/lockscreen")._scalingFrom
+assert(scalingFrom(nil, nil) == "fill", "scaling defaults to fill")
+assert(scalingFrom(nil, true) == "fill", "fill = true maps to fill")
+assert(scalingFrom(nil, false) == "fit", "fill = false maps to fit")
+assert(scalingFrom("stretch", false) == "stretch", "scaling overrides fill")
+assert(scalingFrom("bogus", false) == "fit", "unknown scaling falls back to the fill setting")
 print("main_menu_test: ok")
