@@ -47,6 +47,11 @@ Built on code and ideas from these AGPL-3.0 / GPL-3.0 plugins:
 - Quick setup follows
   [PocketBook Desktop and App Customizations](https://github.com/jjrrw174/PocketBook-Desktop-and-App-Customizations)
   by jjrrw174 and the MobileRead thread it summarises.
+- The Patches menu installs rewrites of community KOReader user patches
+  (hide the "Opening file" message, skip the first repaint, hide frontlight and
+  Wi-Fi pop-ups). Their original authors are unknown; credit will be added
+  once found. Installed patches stay in `koreader/patches/` if the plugin is
+  removed: delete the `2-pbplus-*.lua` files there.
 
 pocketbookcover and pocketbooksync (ckilb) inspired the idea; no code is taken
 from them as they carry no licence.
