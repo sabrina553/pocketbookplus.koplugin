@@ -44,8 +44,8 @@ local PATCHES = {
     },
     {
         name = "disable-wifi-notifications",
-        text = _("Hide Wi-Fi progress pop-ups"),
-        help = _("Hides \"Connecting to…\", \"Scanning for networks…\" and similar messages. Questions and connection errors are still shown."),
+        text = _("Hide Wi-Fi and SSH pop-ups"),
+        help = _("Hides \"Connecting to…\", \"Scanning for networks…\" and similar messages, and the SSH server's started and stopped messages. Questions, connection errors and the SSH shutdown warning are still shown. The SSH address stays under Network → Network info."),
     },
 }
 

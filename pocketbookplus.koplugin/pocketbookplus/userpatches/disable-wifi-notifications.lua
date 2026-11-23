@@ -1,5 +1,6 @@
 -- PocketBook Plus: hides Wi-Fi progress pop-ups ("Connecting to …",
--- "Scanning for networks…", "Connected to …").
+-- "Scanning for networks…", "Connected to …") and the SSH server's
+-- started/stopped messages.
 -- Installed and removed by the plugin's Patches menu; do not edit here.
 -- Based on a community patch, original author unknown.
 --
@@ -12,7 +13,8 @@ local UIManager = require("ui/uimanager")
 local logger = require("logger")
 
 local PATTERNS = { "connecting to", "scanning for", "connected to", "obtaining ip",
-    "turning on wi", "turning off wi", "associating", "waiting for network" }
+    "turning on wi", "turning off wi", "associating", "waiting for network",
+    "ssh server started", "ssh server stopped", "ssh server forcefully stopped" }
 local FAILURES = { "fail", "could not", "couldn't", "unable", "error", "not connected" }
 
 local function contains(s, list)
