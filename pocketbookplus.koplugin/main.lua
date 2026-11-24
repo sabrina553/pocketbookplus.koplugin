@@ -83,7 +83,7 @@ end
 
 -- KOReader events forwarded to modules.
 for _i, ev in ipairs({ "onSuspend", "onResume", "onPageUpdate", "onReaderReady", "onCloseDocument", "onSaveSettings", "onPowerOff", "onReboot",
-        "onToggleNightMode", "onSetNightMode" }) do
+        "onToggleNightMode", "onSetNightMode", "onPocketBookDarkMode" }) do
     PocketBookPlus[ev] = function(self, ...)
         self.registry:dispatch(ev, self, logError, ...)
     end
