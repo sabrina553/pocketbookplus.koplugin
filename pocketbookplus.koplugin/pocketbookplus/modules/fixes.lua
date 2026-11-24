@@ -387,6 +387,8 @@ local function syncDarkMode(reason)
         setFirmwareInversion(night)
         PBConfig.reloadTaskmgr()
         logger.info("PocketBookPlus fixes: dark mode synced (" .. reason .. ")")
+        -- The lock screen module redraws its image for the new mode.
+        UIManager:broadcastEvent(require("ui/event"):new("PocketBookDarkMode", night))
     end
 end
 
