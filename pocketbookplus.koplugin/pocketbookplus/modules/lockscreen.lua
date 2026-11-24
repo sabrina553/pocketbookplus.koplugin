@@ -18,7 +18,8 @@ How the firmware side works (Line theme, firmware 6.x):
 - The boot screen is a flash partition only `iv2sh WriteStartupLogo` writes.
 
 The cover is drawn from the book file, never captured from the screen, so
-KOReader's night mode cannot invert it.
+KOReader's night mode cannot invert it. PocketBook dark mode does invert it,
+so in dark mode the image is stored pre-inverted (see firmwareDark).
 --]]--
 
 local Blitbuffer = require("ffi/blitbuffer")
@@ -62,6 +63,7 @@ local State = {
     cover = nil, title = nil, authors = nil,
     percent = nil,          -- 0..1 of the open book, or nil
     written_percent = nil,  -- whole percent last drawn into the lock image
+    written_dark = nil,     -- firmware dark mode the lock image was drawn for
     pending_reload = false,
     boot_hash = nil,
 }
@@ -91,8 +93,12 @@ local function scaling()
     return scalingFrom(settings:read("lockscreen.scaling"), settings:read("lockscreen.fill"))
 end
 
--- Images are always stored in normal colours: the firmware inverts the lock
--- screen itself when PocketBook dark mode (screen_mode_inverted) is on.
+-- The firmware inverts the lock screen itself while PocketBook dark mode
+-- (screen_mode_inverted) is on, so the image is then stored pre-inverted and
+-- the two cancel: the lock screen always shows normal colours.
+local function firmwareDark()
+    return PBConfig.get("screen_mode_inverted") == "1"
+end
 
 -------------------------------------------------------------------------------
 -- Custom images
@@ -307,9 +313,10 @@ local function orientForPanel(bb)
     return bb
 end
 
-local function writeImage(bb, path, orient)
+local function writeImage(bb, path, orient, invert)
     if not bb then return false end
     if orient then bb = orientForPanel(bb) end
+    if invert then bb:invertRect(0, 0, bb:getWidth(), bb:getHeight()) end
     -- Written aside and renamed, so the firmware never reads a half-written file.
     local tmp = path .. ".tmp"
     local ok = bb:writeToFile(tmp, "bmp", 100, true)
@@ -353,9 +360,28 @@ local function bmpSize(path)
     return le32(19), math.abs(le32(23)) -- height is negative for top-down rows
 end
 
-local function copyFile(src, dst)
+-- Copies a BMP, optionally inverting every pixel byte. Works for 24- and
+-- 32-bit files without decoding: each byte is one colour channel, and
+-- inverting the row padding too is harmless. Palette images return false.
+local function copyFile(src, dst, invert)
     local tmp = dst .. ".tmp"
-    if ffiutil.copyFile(src, tmp) then -- returns an error message on failure
+    if invert then
+        local f = io.open(src, "rb")
+        if not f then return false end
+        local data = f:read("*a")
+        f:close()
+        local a, b, c, d = data:byte(11, 14)
+        local offset = a + b * 256 + c * 65536 + d * 16777216
+        local bpp = data:byte(29) + data:byte(30) * 256
+        if bpp < 24 then return false end
+        local buf = ffi.new("uint8_t[?]", #data)
+        ffi.copy(buf, data, #data)
+        for i = offset, #data - 1 do buf[i] = 255 - buf[i] end
+        local out = io.open(tmp, "wb")
+        if not out then return false end
+        out:write(ffi.string(buf, #data))
+        out:close()
+    elseif ffiutil.copyFile(src, tmp) then -- returns an error message on failure
         os.remove(tmp)
         return false
     end
@@ -389,6 +415,7 @@ end
 
 local function writeLockImages(reason, ctx)
     local w, h = panelSize()
+    local dark = firmwareDark()
     local portrait, landscape
     if mode() == MODE_STATS then
         local data = collectStats()
@@ -412,20 +439,28 @@ local function writeLockImages(reason, ctx)
             util.makePath(LINE_DIR)
             backupOnce(LOCK_PORTRAIT)
             backupOnce(LOCK_LANDSCAPE)
-            local ok = copyFile(path, LOCK_PORTRAIT)
-                and writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE, false)
-            logger.info("PocketBookPlus lockscreen: custom image copied (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
-            if ok then requestReload(reason) end
-            return ok
+            -- A palette BMP can't be inverted byte by byte; it is redrawn below.
+            if copyFile(path, LOCK_PORTRAIT, dark) then
+                local ok = writeImage(composeCustom(h, w, path), LOCK_LANDSCAPE, false, dark)
+                logger.info("PocketBookPlus lockscreen: custom image copied (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
+                if ok then
+                    State.written_dark = dark
+                    requestReload(reason)
+                end
+                return ok
+            end
         end
         portrait, landscape = composeCustom(w, h, path), composeCustom(h, w, path)
     end
     util.makePath(LINE_DIR)
     backupOnce(LOCK_PORTRAIT)
     backupOnce(LOCK_LANDSCAPE)
-    local ok = writeImage(portrait, LOCK_PORTRAIT, false) and writeImage(landscape, LOCK_LANDSCAPE, false)
-    logger.info("PocketBookPlus lockscreen: lock images written (" .. tostring(reason) .. ")", ok and "ok" or "FAILED")
-    if ok then requestReload(reason) end
+    local ok = writeImage(portrait, LOCK_PORTRAIT, false, dark) and writeImage(landscape, LOCK_LANDSCAPE, false, dark)
+    logger.info("PocketBookPlus lockscreen: lock images written (" .. tostring(reason) .. ")", ok and "ok" or "FAILED", dark and "(pre-inverted)" or "")
+    if ok then
+        State.written_dark = dark
+        requestReload(reason)
+    end
     return ok
 end
 
@@ -623,10 +658,15 @@ function LockScreen.onCloseDocument(ctx)
     end
 end
 
+local refresh
+
 -- A new random image is chosen after each wake, so the next standby shows it.
-function LockScreen.onResume()
+-- Dark mode may also have been switched in the PocketBook's own settings.
+function LockScreen.onResume(ctx)
     if mode() == MODE_CUSTOM_RANDOM then
         writeLockImages("resume")
+    elseif State.written_dark ~= nil and State.written_dark ~= firmwareDark() then
+        refresh(ctx, "dark mode")
     elseif State.pending_reload then
         requestReload("resume")
     end
@@ -667,10 +707,15 @@ function LockScreen.onToggle(ctx, on)
     end
 end
 
-local function refresh(ctx, reason)
+refresh = function(ctx, reason)
     if inReader(ctx) then loadBook(ctx) end
     if mode() == MODE_COVER and not State.cover and not State.title then return false end
     return writeLockImages(reason, ctx)
+end
+
+-- Sent by the fixes module once it has switched the firmware's dark mode.
+function LockScreen.onPocketBookDarkMode(ctx)
+    if State.written_dark ~= firmwareDark() then refresh(ctx, "dark mode") end
 end
 
 function LockScreen.menuItems(ctx)
